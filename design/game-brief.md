@@ -37,12 +37,14 @@ Bots fight properly from the start but miss sometimes and react a beat late. Fro
 - Pick a hull and weapon, launch from your gate.
 - Fly to a beacon, fight for it, hold the ring until it turns your colour.
 - Held beacons tick your fleet's score; the beacons drift, so the fight moves.
-- Die, swap loadout, launch again. First fleet to the target score wins the round; the zone resets the beacons and keeps running.
+- Fly over drifting salvage pods: each gives one random upgrade for this life (energy cells, recharge, engines, thrusters, gun power, bouncing shots, side guns, an extra mine) and raises your bounty.
+- Kills raise your bounty too. Whoever downs you collects your bounty as points; you lose your upgrades. A loaded pilot is a big, visible target ("Wanted" on the minimap).
+- Die, watch a 3-second replay of how it happened, swap loadout, launch again with a complete ship. The zone is one huge open map that never ends; rounds are an optional mode (`rounds: 1`).
 - Leads: competitive play leads the teams, score, fair start and bots; the shooter leads flying, aiming and weapons.
 
 ## Goal & fail state
-- Goal: your fleet reaches the target score first (beacon ticks plus kills); the zone then shows the winner and starts the next round without a menu. *(provisional)*
-- Fail: the other fleet gets there first. Your ship's energy hitting zero destroys it: respawn after a short wait. *(provisional)*
+- Goal: in the open zone (default), climb the points table by collecting bounties, and keep your fleet's score ahead through beacons and kills. In rounds mode, your fleet reaches the target score first. *(provisional)*
+- Fail: you are downed and lose your upgrades and bounty to the pilot who got you; the other fleet out-scores yours. Your ship's energy hitting zero destroys it: respawn after a short wait. *(provisional)*
 
 ## Features
 - [x] Drift-and-thrust flight with real momentum, wrap-around zone edges and bouncing off asteroids
@@ -52,6 +54,11 @@ Bots fight properly from the start but miss sometimes and react a beat late. Fro
 - [x] Loadout at respawn: 3 hulls (light, medium, heavy) and 3 weapons (rapid bolts, bouncing shot, spread)
 - [x] Rounds that end on a score and restart in place; the zone never goes to a menu
 - [x] Kill feed naming who hit who, score bar, minimap, energy bar
+- [x] Open zone (2026-11-16): 9600 px endless map, salvage pods with 8 capped upgrades lost on death, bounty and points, "Wanted" marker
+- [x] Bots keep about six ships near each real pilot, are tagged BOT, and go easy (looser aim, no mines) on pilots with few fights
+- [x] 3-second death replay; gamepad aim-steer (point the stick, the nose follows) with a settings toggle
+
+Inspiration note: the open, endless zone with prizes and bounties is a genre idea (classic online 2D space arenas). Every name, number, upgrade list, sprite and sound here is our own; nothing is copied from any existing game.
 
 ## Your systems
 - teams · in the slice

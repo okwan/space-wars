@@ -10,14 +10,15 @@ export interface Settings {
   fleet: number;        // ships per fleet, you included
   server: string;       // the online zone's address
   name: string;         // your call sign online
-  calm: boolean;
-  taught: boolean;      // the first-minute hints have been seen once        // Reduce flashing: caps flash brightness and bloom, no screen shake
+  calm: boolean;        // Reduce flashing: caps flash brightness and bloom, no screen shake
+  taught: boolean;      // the first-minute hints have been seen once
+  aimSteer: boolean;    // gamepad: the nose turns toward the stick's direction (default), or the stick turns left/right
 }
 export const SKILL_NAMES = ['Easy', 'Normal', 'Hard'] as const;
 const KEY = 'beacon-wars-settings';
 
 export function defaults(t: Tuning): Settings {
-  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot', calm: false, taught: false };
+  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot', calm: false, taught: false, aimSteer: true };
 }
 export function load(t: Tuning): Settings {
   const d = defaults(t);

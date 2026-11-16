@@ -113,15 +113,23 @@ describe('beacons', () => {
 });
 
 describe('rounds and the zone', () => {
-  it('a fleet at the target wins the round, and the next round starts in place', () => {
-    const w = zone();
-    w.scores[1] = tune.target_score;
-    step(w, new Map(), tune, STEP);
+  it('with rounds on, a fleet at the target wins the round, and the next round starts in place', () => {
+    const rt = { ...tune, rounds: 1 }, w = zone();
+    w.scores[1] = rt.target_score;
+    step(w, new Map(), rt, STEP);
     expect(w.winner).toBe(1);
     expect(w.roundsWon[1]).toBe(1);
-    for (let i = 0; i * STEP < tune.round_break + 0.1; i++) step(w, new Map(), tune, STEP);
+    for (let i = 0; i * STEP < rt.round_break + 0.1; i++) step(w, new Map(), rt, STEP);
     expect(w.round).toBe(2);
     expect(w.scores).toEqual([0, 0]);
+  });
+  it('in the open zone (rounds off) a fleet past the target keeps playing', () => {
+    const w = zone();
+    w.scores[1] = tune.target_score * 2;
+    step(w, new Map(), tune, STEP);
+    expect(tune.rounds).toBe(0);
+    expect(w.roundOver).toBe(0);
+    expect(w.round).toBe(1);
   });
   it('a joining person takes a bot seat, and a bot takes it back on leaving', () => {
     const w = zone();
@@ -139,11 +147,12 @@ describe('rounds and the zone', () => {
     };
     expect(run()).toBe(run());
   });
-  it('bots play a full round to a winner within ten minutes', () => {
+  it('bots in the open zone fight, collect salvage and earn bounty within three minutes', () => {
     const w = zone(5, []);
-    let i = 0;
-    while (w.winner === -1 && i < 60 * 600) { step(w, new Map(), tune, STEP); w.events = []; i++; }
-    expect(w.winner).not.toBe(-1);
+    let pickups = 0;
+    for (let i = 0; i < 60 * 180; i++) { step(w, new Map(), tune, STEP); pickups += w.events.filter(e => e.type === 'salvage').length; w.events = []; }
     expect(w.ships.some(s => s.kills > 0)).toBe(true);
-  });
+    expect(pickups).toBeGreaterThan(5);
+    expect(w.ships.some(s => s.points > 0)).toBe(true);
+  }, 60000);
 });

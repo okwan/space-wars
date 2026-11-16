@@ -77,6 +77,8 @@ export class Sound {
   kill(): void { this.tone(660, 0.1, 'square', 0.12); this.tone(990, 0.16, 'square', 0.12, 0, 0.07); }
   capture(): void { this.tone(523, 0.12, 'triangle', 0.18); this.tone(784, 0.25, 'triangle', 0.18, 0, 0.11); }
   lost(): void { this.tone(330, 0.35, 'triangle', 0.15, 0.6); }
+  /** Salvage picked up: a bright rising chirp, unlike any combat sound. */
+  pickup(): void { this.tone(740, 0.07, 'sine', 0.14, 1.4); this.tone(1180, 0.12, 'sine', 0.12, 0, 0.06); }
   mine(): void { this.tone(160, 0.12, 'square', 0.1, 1.5); }
   /** Low energy: two short falling beeps, the sound backup for the red HUD bar. */
   warn(): void { this.tone(520, 0.07, 'square', 0.07, 0.8); this.tone(390, 0.09, 'square', 0.07, 0.8, 0.1); }

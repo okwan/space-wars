@@ -31,5 +31,14 @@ recommended default for every open question. Each one is easy to change; say whi
 | 24 | Hints show once per browser (remembered), plus a one-time low-energy hint | Returning players are not re-taught | `src/settings.ts` |
 | 25 | Art v2: Kenney CC0 sprites (Space Shooter Redux/Extension, Explosion, Particle, Planets, UI Sci-fi) replace the vector look; blue ships = cyan fleet, orange = amber; bloom on the lit layer only | Oscar: the code-drawn art "looks really bad"; CC0 is safe for Steam; stock art, so plan custom hero assets before release | `design/art/art-bible.md` (Revision 2), `THIRD_PARTY_NOTICES.md` |
 | 26 | Custom hero art: the three hulls (both fleets) and the beacon station are our own SVG drawings, replacing the Kenney ships and station | Oscar asked for custom art; the hero assets are what makes the game recognisable | `tools/art/hulls.mjs`, `assets/art/` |
+| 27 | The zone is open and endless by default (`rounds: 0`), 9600 px with 110 rocks; rounds stay as an option | Oscar: "a giant map, pretty endless" | `data/config.json`, `src/game/sim.ts` |
+| 28 | Salvage pods (max 70, 2.5 a second, live 60 s) give one random capped upgrade for the current life; 8 upgrades, all lost on death | Oscar asked for pickups that make you stronger; the research (PR 2) says keep them a risk, not a permanent baseline | `src/game/salvage.ts` |
+| 29 | Bounty: start 5, +4 per pickup, a kill pays the victim's bounty as points and adds max(3, half of it) to the killer's bounty; the top bounty (20+) is marked Wanted | Oscar asked for a bounty system; our own numbers | `src/game/salvage.ts`, `src/main.ts` |
+| 30 | Wire protocol 3: snapshots carry salvage, each ship's bounty, points and upgrade levels | Online players must see the same pickups | `src/net/protocol.ts` |
+| 31 | Bots: 60% of each fleet works near the nearest real pilot (about 6 bots within 2200 px), and bots aim 2.5x looser and drop no mines at pilots with under 6 fights | Research picks 1 and 2 (PR 2) | `src/game/bots.ts`, `tests/unit/salvage.test.ts` |
+| 32 | A 3-second death replay plays while you wait to relaunch (Enter skips to the loadout) | Research pick 3 | `src/main.ts` |
+| 33 | Gamepad aim-steer is the default (point the stick, the nose turns at the normal rate); the old stick-turns scheme is a setting | Research pick 4 | `src/gamepad.ts`, `src/settings.ts` |
+| 34 | The salvage pod is our own art: a white-gold pod with a violet core, so it reads as neither fleet | Art bible: no green, team colours reserved for fleets | `tools/art/hulls.mjs` |
+| 35 | Balance test now checks the open zone: fleet score share above 35% over 4 seeds of 5 minutes, with kills, pickups and bounty payouts in each | Rounds no longer happen by default | `tests/unit/balance.test.ts` |
 
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.

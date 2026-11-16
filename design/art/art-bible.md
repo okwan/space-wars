@@ -30,6 +30,10 @@ section wins; everything not listed here still stands.
 - **Shots and effects.** Laser sprites (amber versions hue-shifted from the blue originals), a
   glint on firing, impact stars on hits, a 9-frame painted explosion on kills and mines, a shield
   shimmer when hit. Sparks stay as streaks (a star-shaped spark read as a background star).
+- **Salvage (§4), our own art.** A small white-gold cargo pod with a violet glowing core and a soft
+  violet halo, turning slowly; it blinks for its last five seconds. Gold and violet belong to no fleet,
+  so a pickup never reads as a friend or a foe. Gold also marks bounty in the HUD (bounty line,
+  "Wanted" tag, minimap ring). Drawn in `tools/art/hulls.mjs`.
 - **Beacons (§3, §6), our own art.** A station turns at the centre: a hexagonal core in a lit
   ring with four panel arms, painted blue when cyan holds it, orange when amber holds it, grey
   when neutral. The 8-arc ring, capture fill, team glyph

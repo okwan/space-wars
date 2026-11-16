@@ -117,10 +117,25 @@ function station(p, id) {
     <circle r="10" fill="url(#glow${id})"/>`;
 }
 
+/** Salvage: a drifting cargo pod, white-gold with a violet core, so it reads as neither fleet. */
+function salvage() {
+  const p = { main: '#e9c46a', dark: '#8a6a22', light: '#fff1c4', glow: '#c9a2ff' }, id = 'sv';
+  const body = sym([[0, -40], [22, -30], [30, -8], [30, 10], [22, 32], [0, 40]]);
+  return `${defs(p, id)}
+    <circle r="46" fill="url(#glow${id})" opacity="0.55"/>
+    <path d="${body}" fill="url(#paint${id})" ${stroke}/>
+    ${pair('M22,-30 L30,-8 L30,10 L22,32 L16,26 L16,-24 Z', `fill="${p.light}" opacity="0.35"`)}
+    <rect x="-30" y="-6" width="60" height="12" rx="2" fill="#3b4256" ${stroke} stroke-width="2"/>
+    <circle r="11" fill="#2a1a4a" ${stroke} stroke-width="2"/>
+    <circle r="8" fill="url(#glow${id})"/>
+    ${line('M-14,-22 L14,-22')}${line('M-14,22 L14,22')}`;
+}
+
 const SHIPS = { dart, lancer, bulwark };
 const jobs = [];
 for (const [name, draw] of Object.entries(SHIPS)) for (const t of [0, 1]) jobs.push({ file: `hull_${name}_${t}`, size: 220, svg: draw(PAINT[t], `${name}${t}`) });
 for (const t of [0, 1, 'n']) jobs.push({ file: `station_${t}`, size: 320, svg: station(PAINT[t], `st${t}`) });
+jobs.push({ file: 'salvage', size: 100, svg: salvage() });
 
 mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch(process.env.PAGE_SHOT_BROWSER ? { executablePath: process.env.PAGE_SHOT_BROWSER } : {});

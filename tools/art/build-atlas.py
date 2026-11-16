@@ -54,6 +54,7 @@ sprites = {
     'shield': load(f'{R}/Effects/shield1.png'),
     'mine_0': load(f'{R}/ufoBlue.png'), 'mine_1': load(f'{R}/ufoYellow.png'),
     'beacon_0': art('station_0.png'), 'beacon_1': art('station_1.png'), 'beacon_n': art('station_n.png'),
+    'salvage': art('salvage.png'),
     'spark': fit(load(f'{P}/spark_01.png'), 64), 'glint': fit(load(f'{P}/star_06.png'), 64),
     'planet_a': fit(load('Planets/Planets/planet04.png'), 256), 'planet_b': fit(load('Planets/Planets/planet09.png'), 256),
 }

@@ -13,6 +13,9 @@ export type Hull = 'dart' | 'lancer' | 'bulwark';
 export type Weapon = 'bolt' | 'rico' | 'scatter';
 export const HULLS: readonly Hull[] = ['dart', 'lancer', 'bulwark'];
 export const WEAPONS: readonly Weapon[] = ['bolt', 'rico', 'scatter'];
+/** Salvage upgrades, in the order a ship's `up` levels are kept and sent. */
+export const UPGRADES = ['cells', 'regen', 'engine', 'turn', 'guns', 'bounce', 'spread', 'mines'] as const;
+export type Upgrade = typeof UPGRADES[number];
 /** Collision radius of each hull, px. A shape constant, not a tuning value. */
 export const HULL_RADIUS: Record<Hull, number> = { dart: 12, lancer: 15, bulwark: 20 };
 
@@ -40,6 +43,12 @@ export interface Ship {
   energy: number; alive: boolean; respawn: number; cool: number; mineCool: number;
   thrusting: boolean; burning: boolean; flash: number;
   kills: number; deaths: number; lastHitBy: number;
+  /** Salvage upgrade levels, indexed like UPGRADES. Lost on death. */
+  up: number[];
+  /** What this ship is worth to whoever downs it; grows with salvage and kills, resets on death. */
+  bounty: number;
+  /** Personal points: the bounties this pilot has collected. */
+  points: number;
   slot: number; // position in its fleet, for the launch formation
   brain: BotBrain;
 }
@@ -48,6 +57,8 @@ export interface Shot {
   team: Team; owner: number; kind: Weapon;
   x: number; y: number; vx: number; vy: number; life: number; dmg: number; bounces: number;
 }
+/** A piece of salvage drifting in the zone: fly over it for a random upgrade. */
+export interface Salvage { id: number; x: number; y: number; vx: number; vy: number; age: number }
 export interface Mine { team: Team; owner: number; x: number; y: number; age: number }
 export interface Asteroid {
   x: number; y: number; r: number; spin: number;
@@ -68,9 +79,10 @@ export interface Beacon {
 export type GameEvent =
   | { type: 'shot'; ship: number; kind: Weapon }
   | { type: 'hit'; ship: number; by: number; amount: number }
-  | { type: 'kill'; ship: number; by: number }
+  | { type: 'kill'; ship: number; by: number; bounty: number }
   | { type: 'burst'; x: number; y: number; team: Team; n: number; speed: number }
   | { type: 'mine'; ship: number }
+  | { type: 'salvage'; ship: number; kind: Upgrade; level: number }
   | { type: 'capture'; beacon: number; team: -1 | Team; from: -1 | Team }
   | { type: 'group'; team: Team }
   | { type: 'round'; winner: Team }
@@ -87,5 +99,6 @@ export interface World {
   /** The fleet that is behind moves as one on a target beacon after group_time. */
   grouped: boolean; groupTarget: number; groupTeam: Team;
   asteroids: Asteroid[]; beacons: Beacon[]; ships: Ship[]; shots: Shot[]; mines: Mine[];
+  salvage: Salvage[]; nextSalvage: number; salvageClock: number;
   events: GameEvent[];
 }

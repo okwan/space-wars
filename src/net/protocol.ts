@@ -5,7 +5,7 @@
 import { HULLS, WEAPONS, type GameEvent, type Hull, type ShipInput, type Tuning, type Weapon, type World } from '../game/types';
 
 /** Bumped whenever a message changes shape; a mismatched client is turned away. */
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; name: string }
@@ -26,7 +26,7 @@ export interface Snapshot {
   grouped: number;
   scores: [number, number]; won: [number, number];
   names: string[];
-  /** id, human, hull, weapon, x, y, vx, vy, a, energy, alive, respawn, flash, thrust, burn, kills, deaths, lastHitBy, nextHull, nextWeapon */
+  /** id, human, hull, weapon, x, y, vx, vy, a, energy, alive, respawn, flash, thrust, burn, kills, deaths, lastHitBy, nextHull, nextWeapon, bounty, points, ...upgrade levels */
   ships: number[][];
   /** team, owner, kind, x, y, vx, vy, life, bounces */
   shots: number[][];
@@ -34,6 +34,8 @@ export interface Snapshot {
   mines: number[][];
   /** x, y, vx, vy, owner, progress */
   beacons: number[][];
+  /** id, x, y, vx, vy, age */
+  salvage: number[][];
   events: GameEvent[];
 }
 
@@ -60,10 +62,11 @@ export function snapshot(w: World, tick: number, ack: number, events: GameEvent[
     names: w.ships.map(s => s.name),
     ships: w.ships.map(s => [s.id, s.human ? 1 : 0, HULLS.indexOf(s.hull), WEAPONS.indexOf(s.weapon), r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), r3(s.a),
       r1(s.energy), s.alive ? 1 : 0, r3(s.respawn), s.flash > 0 ? 1 : 0, s.thrusting ? 1 : 0, s.burning ? 1 : 0, s.kills, s.deaths, s.lastHitBy,
-      HULLS.indexOf(s.nextHull), WEAPONS.indexOf(s.nextWeapon)]),
+      HULLS.indexOf(s.nextHull), WEAPONS.indexOf(s.nextWeapon), s.bounty, s.points, ...s.up]),
     shots: w.shots.map(b => [b.team, b.owner, WEAPONS.indexOf(b.kind), r1(b.x), r1(b.y), r1(b.vx), r1(b.vy), r3(b.life), b.bounces]),
     mines: w.mines.map(m => [m.team, m.owner, r1(m.x), r1(m.y), r3(m.age)]),
     beacons: w.beacons.map(b => [r1(b.x), r1(b.y), r1(b.vx), r1(b.vy), b.owner, r3(b.progress)]),
+    salvage: w.salvage.map(v => [v.id, r1(v.x), r1(v.y), r1(v.vx), r1(v.vy), r3(v.age)]),
     events,
   };
 }
@@ -82,9 +85,11 @@ export function applySnapshot(w: World, s: Snapshot): void {
     sh.alive = row[10] === 1; sh.respawn = row[11]; sh.flash = row[12] ? 0.1 : 0; sh.thrusting = row[13] === 1; sh.burning = row[14] === 1;
     sh.kills = row[15]; sh.deaths = row[16]; sh.lastHitBy = row[17];
     sh.nextHull = HULLS[row[18]] as Hull; sh.nextWeapon = WEAPONS[row[19]] as Weapon;
+    sh.bounty = row[20]; sh.points = row[21]; sh.up = row.slice(22);
   }
   w.shots = s.shots.map(r => ({ team: r[0] as 0 | 1, owner: r[1], kind: WEAPONS[r[2]] as Weapon, x: r[3], y: r[4], vx: r[5], vy: r[6], life: r[7], dmg: 0, bounces: r[8] }));
   w.mines = s.mines.map(r => ({ team: r[0] as 0 | 1, owner: r[1], x: r[2], y: r[3], age: r[4] }));
+  w.salvage = s.salvage.map(r => ({ id: r[0], x: r[1], y: r[2], vx: r[3], vy: r[4], age: r[5] }));
   s.beacons.forEach((r, i) => {
     const b = w.beacons[i];
     if (!b) return;

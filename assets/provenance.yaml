@@ -344,3 +344,9 @@
   model: "Claude Opus 5.5"
   date: 2026-11-16
   ships: false
+- path: assets/art/salvage.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false

@@ -2,7 +2,7 @@
 
 import { dist, rand, wd, wrap } from './math';
 import {
-  HULLS, WEAPONS, type Asteroid, type Beacon, type Hull, type Ship, type Team, type Tuning, type Weapon, type World,
+  HULLS, UPGRADES, WEAPONS, type Asteroid, type Beacon, type Hull, type Ship, type Team, type Tuning, type Weapon, type World,
 } from './types';
 
 /** Bot call signs: the game's own, chosen to read as people. */
@@ -65,6 +65,7 @@ function newShip(id: number, team: Team, slot: number, name: string): Ship {
     hull: 'lancer', weapon: 'bolt', nextHull: 'lancer', nextWeapon: 'bolt',
     x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, mineCool: 0,
     thrusting: false, burning: false, flash: 0, kills: 0, deaths: 0, lastHitBy: -1,
+    up: UPGRADES.map(() => 0), bounty: 0, points: 0,
     brain: {
       think: 0, aimA: 0, wobble: 0, home: slot % 3, target: -1,
       wantThrust: false, wantRev: false, wantBurn: false, wantFire: false, wantMine: false,
@@ -89,6 +90,7 @@ export function newWorld(tune: Tuning, opts: WorldOptions): World {
     seed: opts.seed | 0, size, t: 0, roundT: 0, round: 1, scores: [0, 0], roundsWon: [0, 0],
     roundOver: 0, winner: -1, grouped: false, groupTarget: -1, groupTeam: 1,
     asteroids: [], beacons: [], ships: [], shots: [], mines: [], events: [],
+    salvage: [], nextSalvage: 0, salvageClock: 0,
   };
   w.asteroids = makeAsteroids(w, size, tune.asteroids);
   w.beacons = makeBeacons(size, tune.beacon_drift);
@@ -121,6 +123,7 @@ export function launch(w: World, sh: Ship, tune: Tuning, head = 0): void {
     sh.a = Math.atan2(wd(sh.y, b.y, size), wd(sh.x, b.x, size));
     sh.vx = Math.cos(sh.a) * 160; sh.vy = Math.sin(sh.a) * 160;
   }
+  sh.up = UPGRADES.map(() => 0); sh.bounty = tune.bounty_start; // a fresh ship: no salvage, base bounty
   sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.flash = 0; sh.respawn = 0;
 }
 

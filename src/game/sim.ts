@@ -3,6 +3,7 @@
 // Pure and deterministic: the same world, inputs and tuning always give the same next world.
 
 import { think } from './bots';
+import { extraBounces, gunDamage, hasSpread, maxEnergy, mineMax, payBounty, regen, seedSalvage, thrust, topSpeed, turnRate, updateSalvage } from './salvage';
 import { angDiff, dist, rand, wd, wrap } from './math';
 import { gate, launch, makeBeacons, randomLoadout } from './world';
 import { HULL_RADIUS, NO_INPUT, type Ship, type ShipInput, type Team, type Tuning, type World } from './types';
@@ -14,6 +15,7 @@ export const STEP = 1 / 60;
 export function startRound(w: World, tune: Tuning): void {
   w.scores = [0, 0]; w.roundT = 0; w.roundOver = 0; w.winner = -1; w.grouped = false; w.groupTarget = -1; w.groupTeam = 1;
   w.beacons = makeBeacons(w.size, tune.beacon_drift); w.shots = []; w.mines = [];
+  if (!w.salvage.length) seedSalvage(w, tune);
   for (const sh of w.ships) launch(w, sh, tune, sh.human ? 0 : 0.55 + rand(w) * 0.25);
   w.events.push({ type: 'roundStart', round: w.round });
 }
@@ -33,13 +35,14 @@ function fire(w: World, sh: Ship, tune: Tuning): void {
   sh.energy -= cost; sh.cool = tune[`${k}_interval`];
   const sp = tune[`${k}_speed`], r = HULL_RADIUS[sh.hull];
   const angles = k === 'scatter' ? [-tune.scatter_spread, 0, tune.scatter_spread] : [0];
+  if (hasSpread(sh)) angles.push(-tune.up_spread_angle, tune.up_spread_angle); // the spread upgrade: two side shots
   for (const da of angles) {
     const a = sh.a + da;
     w.shots.push({
       team: sh.team, owner: sh.id, kind: k,
       x: wrap(sh.x + Math.cos(a) * r * 1.6, w.size), y: wrap(sh.y + Math.sin(a) * r * 1.6, w.size),
       vx: sh.vx + Math.cos(a) * sp, vy: sh.vy + Math.sin(a) * sp,
-      life: tune[`${k}_life`], dmg: tune[`${k}_damage`], bounces: k === 'rico' ? tune.rico_bounces : 0,
+      life: tune[`${k}_life`], dmg: gunDamage(sh, tune), bounces: (k === 'rico' ? tune.rico_bounces : 0) + extraBounces(sh),
     });
   }
   w.events.push({ type: 'shot', ship: sh.id, kind: k });
@@ -47,7 +50,7 @@ function fire(w: World, sh: Ship, tune: Tuning): void {
 
 function dropMine(w: World, sh: Ship, tune: Tuning): void {
   const live = w.mines.filter(m => m.owner === sh.id).length;
-  if (sh.mineCool > 0 || live >= tune.mine_max || sh.energy <= tune.mine_cost + 1) return;
+  if (sh.mineCool > 0 || live >= mineMax(sh, tune) || sh.energy <= tune.mine_cost + 1) return;
   sh.energy -= tune.mine_cost; sh.mineCool = tune.mine_cooldown;
   const r = HULL_RADIUS[sh.hull];
   w.mines.push({ team: sh.team, owner: sh.id, x: wrap(sh.x - Math.cos(sh.a) * r * 2, w.size), y: wrap(sh.y - Math.sin(sh.a) * r * 2, w.size), age: 0 });
@@ -66,11 +69,14 @@ function destroy(w: World, sh: Ship, by: number, tune: Tuning): void {
   sh.alive = false; sh.respawn = tune.respawn_time; sh.deaths++; sh.energy = 0;
   w.events.push({ type: 'burst', x: sh.x, y: sh.y, team: sh.team, n: 26, speed: 260 });
   const killer = by >= 0 ? w.ships[by] : undefined;
+  let paid = 0;
   if (killer && killer.team !== sh.team) {
     killer.kills++;
+    paid = payBounty(killer, sh, tune);
     if (!w.roundOver) w.scores[killer.team] += tune.kill_points;
   }
-  w.events.push({ type: 'kill', ship: sh.id, by: killer && killer.team !== sh.team ? by : -1 });
+  w.events.push({ type: 'kill', ship: sh.id, by: killer && killer.team !== sh.team ? by : -1, bounty: paid });
+  sh.bounty = 0; sh.up = sh.up.map(() => 0); // the wreck keeps nothing
   if (!sh.human) { const l = randomLoadout(w); sh.nextHull = l.hull; sh.nextWeapon = l.weapon; }
 }
 
@@ -103,23 +109,24 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
     return;
   }
   const h = sh.hull;
-  if (c.left) sh.a -= tune[`${h}_turn`] * dt;
-  if (c.right) sh.a += tune[`${h}_turn`] * dt;
+  const turn = turnRate(sh, tune);
+  if (c.left) sh.a -= turn * dt;
+  if (c.right) sh.a += turn * dt;
   const canBurn = c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
   sh.burning = canBurn;
-  const acc = tune[`${h}_thrust`] * (canBurn ? tune.burn_thrust : 1);
+  const acc = thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
   sh.thrusting = c.thrust || c.rev;
   if (c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
   if (c.rev) { sh.vx -= Math.cos(sh.a) * acc * tune.reverse_thrust * dt; sh.vy -= Math.sin(sh.a) * acc * tune.reverse_thrust * dt; }
   // tiny drag, so ships drift; speed over the cap bleeds off, so an afterburn fades after the burn
   sh.vx *= 1 - tune.drag * dt; sh.vy *= 1 - tune.drag * dt;
-  const cap = tune[`${h}_speed`] * (canBurn ? tune.burn_speed : 1), sp = Math.hypot(sh.vx, sh.vy);
+  const cap = topSpeed(sh, tune) * (canBurn ? tune.burn_speed : 1), sp = Math.hypot(sh.vx, sh.vy);
   if (sp > cap) { const k = Math.max(cap / sp, 1 - tune.overspeed_bleed * dt); sh.vx *= k; sh.vy *= k; }
   sh.x = wrap(sh.x + sh.vx * dt, w.size); sh.y = wrap(sh.y + sh.vy * dt, w.size);
   collideRocks(w, sh, HULL_RADIUS[h] * 0.8, tune);
   // energy: the afterburn drains it, otherwise it refills
   if (canBurn) sh.energy -= tune.burn_drain * dt;
-  else sh.energy = Math.min(tune[`${h}_energy`], sh.energy + tune[`${h}_regen`] * dt);
+  else sh.energy = Math.min(maxEnergy(sh, tune), sh.energy + regen(sh, tune) * dt);
   sh.cool -= dt; sh.mineCool -= dt; sh.flash -= dt;
   if (c.fire) fire(w, sh, tune);
   if (c.mine) dropMine(w, sh, tune);
@@ -210,7 +217,10 @@ export function step(w: World, inputs: ReadonlyMap<number, ShipInput>, tune: Tun
   for (const sh of w.ships) fly(w, sh, sh.human ? inputs.get(sh.id) ?? NO_INPUT : botInput(sh, tune), tune, dt);
   updateShots(w, tune, dt);
   updateBeacons(w, tune, dt);
-  // the round: first fleet to the target wins; after a short break the next starts in place
+  updateSalvage(w, tune, dt);
+  // the round (only when `rounds` is on; the open zone runs forever): first fleet to the target
+  // wins; after a short break the next starts in place
+  if (!tune.rounds) return;
   if (!w.roundOver) {
     for (const t of [0, 1] as Team[]) if (w.scores[t] >= tune.target_score) {
       w.roundOver = tune.round_break; w.winner = t; w.roundsWon[t]++;
