@@ -20,6 +20,47 @@ export class Sound {
   }
   setMuted(m: boolean): void { this.muted = m; if (this.out) this.out.gain.value = m ? 0 : this.volume; }
 
+  private hum: { g: GainNode; f: BiquadFilterNode } | null = null;
+  private bed: { g: GainNode } | null = null;
+  /** A loop of white noise, made once: the body of the engine sound. */
+  private noise(): AudioBufferSourceNode {
+    const ac = this.ac!, buf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate), d = buf.getChannelData(0);
+    let s = 12345; for (let i = 0; i < d.length; i++) { s = (s * 16807) % 2147483647; d[i] = s / 1073741823.5 - 1; }
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true; return src;
+  }
+  /** Your engine: filtered noise that swells with thrust and brightens on afterburner. */
+  private was = '';
+  engine(on: boolean, burn: boolean): void {
+    if (!this.ac || !this.out) return;
+    const key = `${on}${burn}`; if (key === this.was) return; this.was = key;
+    if (!this.hum) {
+      const src = this.noise(), f = this.ac.createBiquadFilter(), g = this.ac.createGain();
+      f.type = 'lowpass'; f.frequency.value = 300; g.gain.value = 0;
+      src.connect(f).connect(g).connect(this.out); src.start();
+      this.hum = { g, f };
+    }
+    const t = this.ac.currentTime;
+    this.hum.g.gain.setTargetAtTime(on ? (burn ? 0.09 : 0.05) : 0, t, 0.06);
+    this.hum.f.frequency.setTargetAtTime(burn ? 1400 : 420, t, 0.1);
+  }
+  /** The zone's bed: a low two-note drone breathing through a slow filter, under play only. */
+  private bedOn = false;
+  ambient(on: boolean): void {
+    if (!this.ac || !this.out || (this.bed && on === this.bedOn)) return;
+    this.bedOn = on;
+    if (!this.bed) {
+      const g = this.ac.createGain(), f = this.ac.createBiquadFilter(), lfo = this.ac.createOscillator(), depth = this.ac.createGain();
+      g.gain.value = 0; f.type = 'lowpass'; f.frequency.value = 380; f.Q.value = 4;
+      lfo.frequency.value = 0.07; depth.gain.value = 220; lfo.connect(depth).connect(f.frequency); lfo.start();
+      for (const [freq, type] of [[55, 'sawtooth'], [82.4, 'triangle'], [110.6, 'sine']] as const) {
+        const o = this.ac.createOscillator(); o.type = type; o.frequency.value = freq; o.detune.value = (freq % 7) - 3; o.connect(f); o.start();
+      }
+      f.connect(g).connect(this.out);
+      this.bed = { g };
+    }
+    this.bed.g.gain.setTargetAtTime(on ? 0.05 : 0, this.ac.currentTime, 0.8);
+  }
+
   /** One tone with an optional pitch slide, on the audio clock. */
   tone(freq: number, dur: number, type: OscillatorType = 'square', vol = 0.3, slide = 0, delay = 0): void {
     if (!this.ac || !this.out || this.muted) return;

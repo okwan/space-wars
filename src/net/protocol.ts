@@ -5,7 +5,7 @@
 import { HULLS, WEAPONS, type GameEvent, type Hull, type ShipInput, type Tuning, type Weapon, type World } from '../game/types';
 
 /** Bumped whenever a message changes shape; a mismatched client is turned away. */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; name: string }
@@ -22,6 +22,7 @@ export type ServerMsg =
 export interface Snapshot {
   t: 'snap'; tick: number; ack: number;
   clock: [number, number, number, number, number, number]; // t, roundT, round, roundOver, winner, groupTarget
+  /** 0: no push; 1 or 2: the cyan or amber fleet is pushing together. */
   grouped: number;
   scores: [number, number]; won: [number, number];
   names: string[];
@@ -54,7 +55,7 @@ export function unpackInput(bits: number, hull: number, weapon: number): ShipInp
 export function snapshot(w: World, tick: number, ack: number, events: GameEvent[]): Snapshot {
   return {
     t: 'snap', tick, ack,
-    clock: [r3(w.t), r3(w.roundT), w.round, r3(w.roundOver), w.winner, w.groupTarget], grouped: w.grouped ? 1 : 0,
+    clock: [r3(w.t), r3(w.roundT), w.round, r3(w.roundOver), w.winner, w.groupTarget], grouped: w.grouped ? w.groupTeam + 1 : 0,
     scores: [r3(w.scores[0]), r3(w.scores[1])], won: [...w.roundsWon],
     names: w.ships.map(s => s.name),
     ships: w.ships.map(s => [s.id, s.human ? 1 : 0, HULLS.indexOf(s.hull), WEAPONS.indexOf(s.weapon), r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), r3(s.a),
@@ -70,7 +71,7 @@ export function snapshot(w: World, tick: number, ack: number, events: GameEvent[
 /** Writes a snapshot into a client's copy of the world (asteroids and labels stay as they are). */
 export function applySnapshot(w: World, s: Snapshot): void {
   [w.t, w.roundT, w.round, w.roundOver] = s.clock;
-  w.winner = s.clock[4] as World['winner']; w.groupTarget = s.clock[5]; w.grouped = s.grouped === 1;
+  w.winner = s.clock[4] as World['winner']; w.groupTarget = s.clock[5]; w.grouped = s.grouped > 0; if (w.grouped) w.groupTeam = (s.grouped - 1) as World['groupTeam'];
   w.scores = [...s.scores]; w.roundsWon = [...s.won];
   for (const row of s.ships) {
     const sh = w.ships[row[0]];

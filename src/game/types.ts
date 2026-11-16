@@ -72,7 +72,7 @@ export type GameEvent =
   | { type: 'burst'; x: number; y: number; team: Team; n: number; speed: number }
   | { type: 'mine'; ship: number }
   | { type: 'capture'; beacon: number; team: -1 | Team; from: -1 | Team }
-  | { type: 'group' }
+  | { type: 'group'; team: Team }
   | { type: 'round'; winner: Team }
   | { type: 'roundStart'; round: number };
 
@@ -84,7 +84,8 @@ export interface World {
   scores: [number, number]; roundsWon: [number, number];
   /** Seconds left of the break between rounds; 0 while a round is on. */
   roundOver: number; winner: -1 | Team;
-  grouped: boolean; groupTarget: number;
+  /** The fleet that is behind moves as one on a target beacon after group_time. */
+  grouped: boolean; groupTarget: number; groupTeam: Team;
   asteroids: Asteroid[]; beacons: Beacon[]; ships: Ship[]; shots: Shot[]; mines: Mine[];
   events: GameEvent[];
 }

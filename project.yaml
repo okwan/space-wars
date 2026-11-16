@@ -52,3 +52,12 @@ commands:
   test: "npm test"
   run: "npm run dev"
   smoke: "npm run smoke"
+
+# Performance budgets (set 2026-11-16 on recommended defaults; see production/decision-log.md #23).
+# Measured in the cloud container (4 CPUs, no GPU): one step plus a full frame costs about 5 ms
+# of CPU with 20 ships. GPU cost of the bloom pass is unmeasured until real hardware (Steam Deck).
+performance:
+  target_framerate: 60
+  frame_budget_ms: 16.67
+  draw_call_limit: 200
+  memory_ceiling_mb: 512

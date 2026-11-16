@@ -87,7 +87,7 @@ export function newWorld(tune: Tuning, opts: WorldOptions): World {
   const size = tune.world_size;
   const w: World = {
     seed: opts.seed | 0, size, t: 0, roundT: 0, round: 1, scores: [0, 0], roundsWon: [0, 0],
-    roundOver: 0, winner: -1, grouped: false, groupTarget: -1,
+    roundOver: 0, winner: -1, grouped: false, groupTarget: -1, groupTeam: 1,
     asteroids: [], beacons: [], ships: [], shots: [], mines: [], events: [],
   };
   w.asteroids = makeAsteroids(w, size, tune.asteroids);

@@ -57,7 +57,7 @@ interface FeedLine { a: string; at: Team; b: string; bt: Team | -1; t: number }
 interface View {
   cam: { x: number; y: number }; shake: number; sparks: Spark[]; feed: FeedLine[];
   banner: { text: string; t: number; team?: Team } | null;
-  hint: number; hintT: number; thrustTime: number; turned: boolean;
+  hint: number; hintT: number; lowHint: number; lowTaught: boolean; thrustTime: number; turned: boolean;
   loadout: { hull: Ship['hull']; weapon: Ship['weapon'] };
 }
 let scene = '', world: World, view: View;
@@ -66,7 +66,7 @@ function newView(): void {
   const me = world.ships[ME];
   view = {
     cam: { x: me.x, y: me.y }, shake: 0, sparks: [], feed: [], banner: { text: 'Round 1: take the beacons', t: 3 },
-    hint: 0, hintT: 0, thrustTime: 0, turned: false, loadout: { hull: me.hull, weapon: me.weapon },
+    hint: settings.taught ? 4 : 0, hintT: 0, lowHint: 0, lowTaught: false, thrustTime: 0, turned: false, loadout: { hull: me.hull, weapon: me.weapon },
   };
 }
 /** A new offline zone: you and bots. */
@@ -130,7 +130,7 @@ function react(events: GameEvent[]): void {
         else if (e.from === me().team) { sound.lost(); view.banner = { text: `${b.label} lost`, t: 2.2, team: (1 - me().team) as Team }; }
         break;
       }
-      case 'group': view.banner = { text: 'The amber fleet is moving as one', t: 3, team: 1 }; break;
+      case 'group': view.banner = { text: `The ${TEAM[e.team].short.toLowerCase()} fleet is moving as one`, t: 3, team: e.team }; break;
       case 'round': (e.winner === me().team ? sound.win() : sound.lost()); break;
       case 'roundStart': view.banner = { text: `Round ${e.round}: go`, t: 3 }; break;
     }
@@ -140,6 +140,7 @@ function react(events: GameEvent[]): void {
 let wasLow = false;
 function updatePlay(dt: number): void {
   const input = myInput();
+  sound.engine(me().alive && input.thrust, input.burn);
   if (input.left || input.right) view.turned = true;
   if (input.thrust && me().alive) view.thrustTime += dt;
   if (net) {
@@ -155,13 +156,14 @@ function updatePlay(dt: number): void {
   // first-minute hints, taught by doing
   const p = me();
   const isLow = p.alive && p.energy < tune[`${p.hull}_energy`] * tune.low_energy_warn;
-  if (isLow && !wasLow) sound.warn();
+  if (isLow && !wasLow) { sound.warn(); if (!view.lowTaught) { view.lowTaught = true; view.lowHint = 6; } }
+  view.lowHint = Math.max(0, view.lowHint - dt);
   wasLow = isLow;
   view.hintT += dt;
   if (view.hint === 0 && view.thrustTime > 1.2 && view.turned) { view.hint = 1; view.hintT = 0; }
   if (view.hint === 1 && (world.beacons.some(b => dist(p, b, world.size) < 450) || view.hintT > 25)) { view.hint = 2; view.hintT = 0; }
   if (view.hint === 2 && (world.beacons.some(b => b.owner === p.team && dist(p, b, world.size) < tune.beacon_radius) || view.hintT > 35)) { view.hint = 3; view.hintT = 0; }
-  if (view.hint === 3 && view.hintT > 9) view.hint = 4;
+  if (view.hint === 3 && view.hintT > 9) { view.hint = 4; if (!settings.taught) { settings.taught = true; save(settings); } }
   for (const f of view.feed) f.t -= dt;
   view.feed = view.feed.filter(f => f.t > 0);
   if (view.banner) { view.banner.t -= dt; if (view.banner.t <= 0) view.banner = null; }
@@ -273,6 +275,8 @@ const scenes: Record<string, { update(dt: number): void }> = {
 function step(): void {
   if (pressed('KeyM')) sound.setMuted(!sound.muted);
   simT += STEP;
+  if (scene !== 'play') sound.engine(false, false);
+  sound.ambient(scene === 'play' || scene === 'pause');
   scenes[scene].update(STEP);
   hit.clear();
 }
@@ -470,7 +474,7 @@ async function start(): Promise<void> {
       'Sit inside the ring to take it. Beacons you hold score for your fleet while they drift.',
       'Shift afterburns, E drops a mine behind you. Lead your shots: aim where they will be.',
     ];
-    const hs = hints[view.hint];
+    const hs = view.lowHint > 0 ? 'Low energy: ease off the trigger to recharge. At zero your ship is destroyed.' : hints[view.hint];
     if (hs && !world.roundOver && p.alive) {
       const w = L.width(hs, 17) + 36;
       hud.rect(W / 2 - w / 2, H - 112, w, 36).fill({ color: 0x060a18, alpha: 0.85 }).stroke({ width: 1, color: TEAM[0].dim });

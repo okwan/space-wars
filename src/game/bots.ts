@@ -27,7 +27,7 @@ export function think(w: World, sh: Ship, tune: Tuning, dt: number): void {
   for (const o of w.ships) if (o.alive && o.team !== sh.team) { const d = dist(sh, o, size); if (d < fd) { fd = d; foe = o; } }
   // which beacon to work on
   let goal = w.beacons[b.home];
-  const grouped = sh.team === 1 && w.grouped && (sh.slot % 10) / 10 < tune.group_share;
+  const grouped = sh.team === w.groupTeam && w.grouped && (sh.slot % 10) / 10 < tune.group_share;
   if (grouped && w.groupTarget >= 0) goal = w.beacons[w.groupTarget];
   else if (goal.owner === sh.team && Math.abs(goal.progress) >= 1) {
     let best = goal, bd = Infinity; // home is safe: help the nearest beacon that is not ours

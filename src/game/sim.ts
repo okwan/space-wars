@@ -12,7 +12,7 @@ export const STEP = 1 / 60;
 
 /** Starts a round: scores and beacons reset, every ship launches from its gate. */
 export function startRound(w: World, tune: Tuning): void {
-  w.scores = [0, 0]; w.roundT = 0; w.roundOver = 0; w.winner = -1; w.grouped = false; w.groupTarget = -1;
+  w.scores = [0, 0]; w.roundT = 0; w.roundOver = 0; w.winner = -1; w.grouped = false; w.groupTarget = -1; w.groupTeam = 1;
   w.beacons = makeBeacons(w.size, tune.beacon_drift); w.shots = []; w.mines = [];
   for (const sh of w.ships) launch(w, sh, tune, sh.human ? 0 : 0.55 + rand(w) * 0.25);
   w.events.push({ type: 'roundStart', round: w.round });
@@ -184,16 +184,18 @@ export function updateBeacons(w: World, tune: Tuning, dt: number): void {
     }
     if (b.owner !== -1) w.scores[b.owner] += tune.beacon_points * dt;
   }
-  // after a while the amber fleet picks one cyan-held beacon and goes for it together
+  // after a while the fleet that is behind (amber on a tie) picks one enemy-held beacon and goes
+  // for it together: a comeback push that works the same for either side
   if (w.roundT > tune.group_time && !w.roundOver) {
-    const amber = w.ships.find(x => x.team === 1 && x.alive) ?? gate(1, w.size);
+    const team: Team = w.scores[0] < w.scores[1] ? 0 : 1, foe = (1 - team) as Team;
+    const lead = w.ships.find(x => x.team === team && x.alive) ?? gate(team, w.size);
     let best = -1, bd = Infinity;
     w.beacons.forEach((b, i) => {
-      const d = dist(amber, b, w.size) + (b.owner === 0 ? 0 : w.size);
+      const d = dist(lead, b, w.size) + (b.owner === foe ? 0 : w.size);
       if (d < bd) { bd = d; best = i; }
     });
     w.groupTarget = best;
-    if (!w.grouped) { w.grouped = true; w.events.push({ type: 'group' }); }
+    if (!w.grouped || w.groupTeam !== team) { w.grouped = true; w.groupTeam = team; w.events.push({ type: 'group', team }); }
   }
 }
 
