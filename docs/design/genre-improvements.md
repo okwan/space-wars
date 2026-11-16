@@ -199,7 +199,7 @@ them farm the open zone.
 
 ## 4. Suggested order
 
-The build thread ("Pick the space game concept", which owns the game code) should
+The build thread ("Build Beacon Wars toward a Continuum-style zone", which owns the game code) should
 adopt items 1-5 in its current rework toward the giant map, prize pickups and
 bounty, since the map size and prize rules decide items 1 and 5.
 
