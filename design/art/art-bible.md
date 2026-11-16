@@ -1,6 +1,6 @@
 # Art Bible: Beacon Wars
 
-> **Status**: Draft (sections picked on Oscar's behalf overnight, on his ask to run the skills with recommended options; open to revision)
+> **Status**: Draft, revision 2 (sprite art). Revision 1 was picked on Oscar's behalf overnight; revision 2 follows his playtest note that the code-drawn look "looks really bad".
 > **Owned By**: art-director
 > **Last Updated**: 2026-11-16
 > **Art Director Sign-Off (AD-ART-BIBLE)**: SKIPPED 2026-11-16 — solo mode
@@ -8,6 +8,42 @@
 `/art-bible` writes these nine sections in this order and replaces each
 section's `[To be designed]` line as that section is approved. A section still
 holding its placeholder is incomplete; a later run fills only those.
+
+## Revision 2 (2026-11-16): painted sprites replace the neon vector look
+
+Oscar played revision 1 and said the art still looks bad. The vector outlines are replaced with
+painted 2D sprites from Kenney's CC0 packs (Space Shooter Redux and Extension, Explosion Pack,
+Particle Pack, Planets, UI Pack Sci-fi). Where a rule below conflicts with this section, this
+section wins; everything not listed here still stands.
+
+- **Identity, updated.** Clean, bright, painted sci-fi sprites on a deep starfield with a cool
+  nebula. Light still marks what matters (shots, flames, beacon rings and explosions sit on the lit
+  layer and get bloom), but figures are now solid painted objects, not outlines.
+- **Ships (§3, §5).** Team is the paint: cyan fleet ships are blue-bodied, amber fleet ships
+  orange-bodied. Class is the silhouette: Dart is the narrow delta (Redux playerShip3), Lancer the
+  winged fighter (playerShip1), Bulwark the heavy armoured block (Redux enemy4, turned to face
+  forward). Colour-blind backup kept: a small team pip behind each hull (cyan triangle, amber
+  diamond), drawn over the sprite. Your ship keeps the white chevron.
+- **Motion (§1.2).** Engine flames are sprites (blue or orange, white-hot on afterburner); drift
+  trails and shot tails stay as short fading lines.
+- **Shots and effects.** Laser sprites (amber versions hue-shifted from the blue originals), a
+  glint on firing, impact stars on hits, a 9-frame painted explosion on kills and mines, a shield
+  shimmer when hit. Sparks stay as streaks (a star-shaped spark read as a background star).
+- **Beacons (§3, §6).** A satellite station sprite turns at the centre: blue panels when cyan
+  holds it, yellow when amber holds it, grey when neutral. The 8-arc ring, capture fill, team glyph
+  and ground wash stay as drawn.
+- **Rocks.** Grey meteor sprites, slightly darkened, sized to each rock's collision radius.
+- **Background (§6).** A tiled starfield (darkened to the void colour), a tinted nebula at a
+  second parallax depth, two dim far planets, plus the existing star dots.
+- **HUD (§7).** Kenney's notched glass panels, tinted dark navy, frame every HUD group; gauges are
+  the pack's glossy bars (blue for cyan, yellow for amber, red when low) on a dark track. Low-energy
+  hatching, threshold tick and warning glyph are unchanged.
+- **Asset standards (§8).** Sprites live in one atlas (`assets/sprites/atlas.png`, 1024 px,
+  built by `tools/art/build-atlas.py` from the vendored originals in `assets/vendor/`). Every
+  sprite faces up. Any new sprite needs a commercial-use licence recorded in
+  `assets/provenance.yaml` and `THIRD_PARTY_NOTICES.md`. Bloom now runs on the lit layer only.
+- **Known limits.** These are stock packs other games also use; for the Steam release, plan a
+  custom pass on the hero assets (the three hulls, the beacon station) so the game has its own look.
 
 ## 1. Visual Identity Statement
 

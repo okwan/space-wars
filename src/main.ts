@@ -15,9 +15,10 @@ import { HULL_RADIUS, HULLS, WEAPONS, type GameEvent, type Ship, type ShipInput,
 import { gate, newWorld } from './game/world';
 import { clock, install, manual, params, seedFrom } from './hook';
 import {
-  arrow, blip, dashedRing, drawTrail, look, diamond, drawAsteroid, drawBeacon, drawMine, drawShip, drawShot,
+  arrow, blip, dashedPoly, dashedRing, drawTrail, look, diamond, drawBeacon, pts, TEAM_GLYPH,
   HULL_NAME, HULL_ROLE, INK, ownerColor, ownerCss, TEAM, WEAPON_NAME, WEAPON_ROLE,
 } from './render/art';
+import { Backdrop, beaconSprite, boomSprite, loadArt, mineSprite, PanelPool, rockSprite, shipSprite, shotSprite, SpritePool, type ShipSpriteLook } from './render/sprites';
 
 const base = tuningFrom(config);
 let settings: Settings = load(base);
@@ -53,9 +54,10 @@ addEventListener('blur', () => down.clear());
 
 // ---- The session: the zone plus what only this screen needs ------------------------------
 interface Spark { x: number; y: number; vx: number; vy: number; life: number; team: Team }
+interface Fx { kind: 'boom' | 'impact'; x: number; y: number; age: number; life: number; size: number; team: Team }
 interface FeedLine { a: string; at: Team; b: string; bt: Team | -1; t: number }
 interface View {
-  cam: { x: number; y: number }; shake: number; sparks: Spark[]; feed: FeedLine[];
+  cam: { x: number; y: number }; shake: number; sparks: Spark[]; fx: Fx[]; feed: FeedLine[];
   banner: { text: string; t: number; team?: Team } | null;
   hint: number; hintT: number; lowHint: number; lowTaught: boolean; thrustTime: number; turned: boolean;
   loadout: { hull: Ship['hull']; weapon: Ship['weapon'] };
@@ -65,7 +67,7 @@ const log: GameEvent[] = []; // window.game.events
 function newView(): void {
   const me = world.ships[ME];
   view = {
-    cam: { x: me.x, y: me.y }, shake: 0, sparks: [], feed: [], banner: { text: 'Round 1: take the beacons', t: 3 },
+    cam: { x: me.x, y: me.y }, shake: 0, sparks: [], fx: [], feed: [], banner: { text: 'Round 1: take the beacons', t: 3 },
     hint: settings.taught ? 4 : 0, hintT: 0, lowHint: 0, lowTaught: false, thrustTime: 0, turned: false, loadout: { hull: me.hull, weapon: me.weapon },
   };
 }
@@ -110,6 +112,8 @@ function react(events: GameEvent[]): void {
       case 'shot': { const s = world.ships[e.ship]; if (e.ship === ME || near(s.x, s.y, 700)) (e.kind === 'bolt' ? sound.shoot() : sound.heavy()); break; }
       case 'hit': if (e.ship === ME) { if (!settings.calm) view.shake = Math.min(10, view.shake + e.amount / 40); sound.hit(); } break;
       case 'burst':
+        if (e.n >= 30) view.fx.push({ kind: 'boom', x: e.x, y: e.y, age: 0, life: 0.55, size: 90, team: e.team }); // a mine going off
+        else if (e.n <= 4) view.fx.push({ kind: 'impact', x: e.x, y: e.y, age: 0, life: 0.16, size: 30, team: e.team });
         for (let i = 0; i < e.n; i++) { // sparks are only for the eye, so they use Math.random
           const a = Math.random() * Math.PI * 2, s = e.speed * (0.3 + Math.random() * 0.7);
           view.sparks.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.6, team: e.team });
@@ -117,6 +121,7 @@ function react(events: GameEvent[]): void {
         break;
       case 'kill': {
         const v = world.ships[e.ship], k = e.by >= 0 ? world.ships[e.by] : undefined;
+        view.fx.push({ kind: 'boom', x: v.x, y: v.y, age: 0, life: 0.7, size: 70 + HULL_RADIUS[v.hull] * 4, team: v.team });
         if (near(v.x, v.y, 900)) sound.boom();
         if (e.by === ME) sound.kill();
         view.feed.unshift(k ? { a: k.name, at: k.team, b: v.name, bt: v.team, t: 5 } : { a: v.name, at: v.team, b: 'the rocks', bt: -1, t: 5 });
@@ -170,6 +175,8 @@ function updatePlay(dt: number): void {
   view.shake = Math.max(0, view.shake - dt * 30);
   for (const s of view.sparks) { s.life -= dt; s.x = wrap(s.x + s.vx * dt, world.size); s.y = wrap(s.y + s.vy * dt, world.size); s.vx *= 0.96; s.vy *= 0.96; }
   view.sparks = view.sparks.filter(s => s.life > 0);
+  for (const f of view.fx) f.age += dt;
+  view.fx = view.fx.filter(f => f.age < f.life);
   // the camera follows you, leaning toward where you drift
   const lx = wrap(p.x + (p.alive ? p.vx : 0) * 0.35, world.size), ly = wrap(p.y + (p.alive ? p.vy : 0) * 0.35, world.size);
   const k = Math.min(1, dt * 4);
@@ -316,18 +323,51 @@ async function start(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const app = new Application();
   await app.init({ canvas, width: W, height: H, background: '#03040b', resolution: Math.min(2, devicePixelRatio || 1), autoDensity: false, antialias: true, autoStart: false });
-  const g = new Graphics(), hud = new Graphics(), top = new Graphics(), textLayer = new Container(), topText = new Container();
-  // One bloom pass (art bible §8): the zone is drawn once into a texture, shown sharp, and shown
-  // again blurred at half resolution and added on top, so every lit line glows at one cost.
-  const lit = RenderTexture.create({ width: W, height: H, resolution: app.renderer.resolution, antialias: true });
-  const sharp = new Sprite(lit), bloom = new Sprite(lit);
-  bloom.filters = [new BlurFilter({ strength: 10, quality: 3, resolution: 0.5 })];
+  const art = await loadArt();
+  // Layers, back to front: the backdrop (tiled stars, nebula, planets), ground light (washes,
+  // trails, gates), the sprites (rocks, stations, mines, ships), the lit layer (rings, shots,
+  // flames, explosions), marks over ships, then the bloom of the lit layer, then the HUD.
+  const back = new Backdrop(art, W, H);
+  const gb = new Graphics(), spriteLayer = new Container(), lit = new Container(), g = new Graphics(), fxLayer = new Container();
+  const go = new Graphics(), panelLayer = new Container(), hud = new Graphics(), top = new Graphics(), topPanels = new Container(), topSprites = new Container();
+  const textLayer = new Container(), topText = new Container();
+  lit.addChild(g, fxLayer);
+  const S = new SpritePool(spriteLayer, art), F = new SpritePool(fxLayer, art), TS = new SpritePool(topSprites, art), P = new PanelPool(panelLayer, art), TP = new PanelPool(topPanels, art);
+  /** A HUD panel: Kenney's notched glass panel, tinted to the dark navy of the instrument frame. */
+  const panel = (pool: PanelPool, x: number, y: number, w: number, h: number, alpha = 0.9, tint = 0x26345c) => pool.put('panel', x, y, w, h, tint, alpha);
+  /** A gauge: a dark track and a glossy fill in team colour (red when low). */
+  const gauge = (x: number, y: number, w: number, h: number, f: number, kind: 'bar0' | 'bar1' | 'barLow') => {
+    P.put('barTrack', x, y, w, h, 0x3a4466, 0.9);
+    if (w * f >= 24) P.put(kind, x, y, w * f, h);
+    else if (f > 0) hud.rect(x + 2, y + 3, Math.max(2, w * f - 2), h - 6).fill(kind === 'barLow' ? 0xff5a6a : TEAM[kind === 'bar0' ? 0 : 1].main);
+  };
+  // One bloom pass (art bible §8): only the lit layer is drawn again, at half resolution, blurred
+  // and added on top, so shots, flames and rings glow and the ships' paintwork stays crisp.
+  const glowRT = RenderTexture.create({ width: W, height: H, resolution: 0.5 });
+  const bloom = new Sprite(glowRT); bloom.scale.set(1);
+  bloom.filters = [new BlurFilter({ strength: 8, quality: 3 })];
   bloom.blendMode = 'add';
   // the Canvas 2D fallback (no WebGL) skips filters, so an unblurred copy would only double every colour
-  const canBloom = app.renderer.type !== RendererType.CANVAS;
-  bloom.visible = canBloom;
-  app.stage.addChild(sharp, bloom, hud, textLayer, top, topText);
+  bloom.visible = app.renderer.type !== RendererType.CANVAS;
+  app.stage.addChild(back.layer, gb, spriteLayer, lit, go, bloom, panelLayer, hud, textLayer, top, topPanels, topSprites, topText);
   const L = new Labels(textLayer), T = new Labels(topText);
+
+  /** A ship sprite plus the marks drawn over it: team pip, your chevron, the low-energy ring. */
+  function ship(pool: SpritePool, fx: SpritePool, marks: Graphics, hull: Ship['hull'], team: Team, X: number, Y: number, a: number, r: number, o: ShipSpriteLook & { you?: boolean } = {}): void {
+    shipSprite(pool, fx, hull, team, X, Y, a, r, { ...o, calm: settings.calm });
+    const px = X - Math.cos(a) * r * 1.55, py = Y - Math.sin(a) * r * 1.55; // team pip behind the hull (cyan triangle, amber diamond)
+    marks.poly(pts(TEAM_GLYPH[team], px, py, a, 4.5), true).fill(TEAM[team].main).stroke({ width: 1, color: INK });
+    if (o.you) marks.poly(pts([[-2.2, 0.75], [-1.85, 0], [-2.2, -0.75]], X, Y, a, r), false).stroke({ width: 2, color: 0xffffff, alpha: 0.9 });
+    if (o.low) { // low energy: a dashed ring in team colour round the hull (a backup for the red HUD bar)
+      const ring: number[] = []; for (let i = 0; i < 20; i++) ring.push(X + Math.cos(i * Math.PI / 10) * r * 1.9, Y + Math.sin(i * Math.PI / 10) * r * 1.9);
+      dashedPoly(marks, ring, 5, 5, TEAM[team].main, 2, settings.calm || Math.sin((o.t ?? 0) * 28) > -0.3 ? 0.9 : 0.3);
+    }
+  }
+  /** A beacon: wash on the ground layer, ring on the lit layer, the station sprite between. */
+  function beacon(b: { owner: -1 | Team; progress: number; phase: number }, X: number, Y: number, R: number, s: number, t: number): void {
+    beaconSprite(S, b.owner, X, Y, s, t, b.phase);
+    drawBeacon(g, b, X, Y, R, s, t, { under: gb, core: false });
+  }
 
   const z = (): number => tune.zoom;
   const toScreen = (x: number, y: number): [number, number] => {
@@ -337,12 +377,13 @@ async function start(): Promise<void> {
   const on = (X: number, Y: number, m: number): boolean => X > -m && X < W + m && Y > -m && Y < H + m;
 
   function drawStars(cx: number, cy: number): void {
+    back.update(cx, cy, world.size);
     for (const st of stars) {
       const par = [0.15, 0.3, 0.5][st.layer];
       const x = (((st.x - cx * par) % 1600) + 1600) % 1600 - 160, y = (((st.y - cy * par) % 1600) + 1600) % 1600 - 440;
       if (x < 0 || x > W || y < 0 || y > H) continue;
       const sz = st.layer + 1;
-      g.rect(x, y, sz, sz).fill({ color: [0xaabeff, 0xc8d2ff, 0xe6e6ff][st.layer], alpha: st.b * (0.35 + st.layer * 0.25) });
+      gb.rect(x, y, sz, sz).fill({ color: [0xaabeff, 0xc8d2ff, 0xe6e6ff][st.layer], alpha: st.b * (0.25 + st.layer * 0.2) });
     }
   }
 
@@ -355,14 +396,14 @@ async function start(): Promise<void> {
       const dir = team === 0 ? 1 : -1;
       for (const sy of [-1, 1]) {
         const path = () => g.moveTo(X - dir * 60 * s, Y + sy * 150 * s).lineTo(X - dir * 110 * s, Y + sy * 150 * s).lineTo(X - dir * 110 * s, Y + sy * 40 * s);
-        path(); g.stroke({ width: 9, color: TEAM[team].main, alpha: 0.2 }); path(); g.stroke({ width: 3, color: TEAM[team].dim });
+        path(); gb.stroke({ width: 9, color: TEAM[team].main, alpha: 0.2 }); path(); gb.stroke({ width: 3, color: TEAM[team].dim });
       }
       L.put(team === 0 ? 'Cyan gate' : 'Amber gate', X - dir * 85 * s, Y - 175 * s, 16, TEAM[team].css);
     }
     for (const b of world.beacons) {
       const [X, Y] = toScreen(b.x, b.y);
       if (!on(X, Y, tune.beacon_radius * s * 2.3)) continue;
-      drawBeacon(g, b, X, Y, tune.beacon_radius * s, s, t);
+      beacon(b, X, Y, tune.beacon_radius * s, s, t);
       L.put(b.label, X, Y - tune.beacon_radius * s - 30, 18, ownerCss(b.owner), 'center', true);
     }
     if (world.roundOver > 0 && world.winner !== -1) { // round won: a shockwave rolls out of each of the winner's beacons
@@ -377,12 +418,20 @@ async function start(): Promise<void> {
         }
       }
     }
-    for (const a of world.asteroids) { const [X, Y] = toScreen(a.x, a.y); if (on(X, Y, a.r * s + 10)) drawAsteroid(g, a, X, Y, s); }
-    for (const m of world.mines) { const [X, Y] = toScreen(m.x, m.y); if (on(X, Y, 30)) drawMine(g, m, m.age >= tune.mine_arm, X, Y, s, t); }
-    for (const b of world.shots) { const [X, Y] = toScreen(b.x, b.y); if (on(X, Y, 30)) drawShot(g, b, X, Y, s, tune[`${b.kind}_life`] - b.life < 0.07); }
+    world.asteroids.forEach((a, i) => { const [X, Y] = toScreen(a.x, a.y); if (on(X, Y, a.r * s * 1.3 + 10)) rockSprite(S, a, X, Y, s, i); });
+    for (const m of world.mines) { const [X, Y] = toScreen(m.x, m.y); if (on(X, Y, 30)) mineSprite(S, F, m.team, m.age >= tune.mine_arm, X, Y, s, t, settings.calm); }
+    for (const b of world.shots) {
+      const [X, Y] = toScreen(b.x, b.y); if (!on(X, Y, 30)) continue;
+      g.moveTo(X, Y).lineTo(X - b.vx * 0.045 * s, Y - b.vy * 0.045 * s).stroke({ width: b.kind === 'rico' ? 3 : 2, color: TEAM[b.team].main, alpha: 0.45, cap: 'round' }); // a short tail: it reads as a shot, not a star
+      shotSprite(F, b.team, b.kind, b.vx, b.vy, X, Y, s, tune[`${b.kind}_life`] - b.life < 0.07, t); }
+    for (const f of view.fx) {
+      const [X, Y] = toScreen(f.x, f.y); if (!on(X, Y, f.size)) continue;
+      if (f.kind === 'boom') boomSprite(F, X, Y, f.size * s * 1.4, f.age, f.life);
+      else F.put(`impact_${f.team}`, X, Y, f.age * 8, f.size * s * (1 - f.age / f.life * 0.5), { add: true, alpha: 1 - f.age / f.life });
+    }
     for (const p of view.sparks) {
       const [X, Y] = toScreen(p.x, p.y); if (!on(X, Y, 10)) continue;
-      g.moveTo(X, Y).lineTo(X - p.vx * 0.04 * s, Y - p.vy * 0.04 * s).stroke({ width: 2, color: p.life > 0.5 ? 0xffffff : TEAM[p.team].main });
+      g.moveTo(X, Y).lineTo(X - p.vx * 0.05 * s, Y - p.vy * 0.05 * s).stroke({ width: 2.5, color: p.life > 0.5 ? 0xffffff : TEAM[p.team].main, alpha: Math.min(1, p.life * 1.6), cap: 'round' });
     }
     const p = me();
     let tag: Ship | undefined, td = 700; // the nearest enemy gets a name tag: who it is, and that it is a bot
@@ -392,13 +441,13 @@ async function start(): Promise<void> {
       const [X, Y] = toScreen(sh.x, sh.y);
       if (!on(X, Y, 60)) continue;
       const r = HULL_RADIUS[sh.hull] * s * 1.25;
-      drawTrail(g, sh.team, X, Y, sh.vx, sh.vy, s);
+      drawTrail(gb, sh.team, X, Y, sh.vx, sh.vy, s);
       const maxE = tune[`${sh.hull}_energy`];
-      drawShip(g, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0, low: sh.energy < maxE * tune.low_energy_warn });
+      ship(S, F, go, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0, low: sh.energy < maxE * tune.low_energy_warn });
       if (sh.id !== ME && sh.energy < maxE * 0.98) {
         const w = 34 * s;
-        g.rect(X - w / 2, Y + r * 1.6, w, 3).fill({ color: 0xffffff, alpha: 0.15 });
-        g.rect(X - w / 2, Y + r * 1.6, w * Math.max(0, sh.energy / maxE), 3).fill(TEAM[sh.team].main);
+        go.rect(X - w / 2, Y + r * 1.9, w, 3).fill({ color: 0x000000, alpha: 0.5 });
+        go.rect(X - w / 2, Y + r * 1.9, w * Math.max(0, sh.energy / maxE), 3).fill(TEAM[sh.team].main);
       }
       if (sh === tag) L.put(`${sh.name} · ${HULL_NAME[sh.hull]}`, X, Y - r * 1.9 - 6, 14, TEAM[sh.team].css);
     }
@@ -413,13 +462,12 @@ async function start(): Promise<void> {
 
   function drawHUD(): void {
     const p = me(), bw = 520, bx = W / 2 - bw / 2, by = 18;
-    hud.rect(10, 8, 220, 52).fill({ color: 0x03040b, alpha: 0.75 });
-    hud.rect(bx - 110, by - 6, bw + 260, 84).fill({ color: 0x03040b, alpha: 0.75 });
-    if (view.feed.length) hud.rect(W - 300, 10, 290, view.feed.length * 24 + 6).fill({ color: 0x03040b, alpha: 0.75 });
+    panel(P, 8, 6, 226, 58);
+    panel(P, bx - 112, by - 10, bw + 264, 90);
+    if (view.feed.length) panel(P, W - 304, 6, 296, view.feed.length * 24 + 14);
     for (const t of [0, 1] as Team[]) { // both fleets racing to the target
       const y = by + t * 22, f = Math.min(1, world.scores[t] / tune.target_score);
-      hud.rect(bx, y, bw, 12).fill({ color: 0xffffff, alpha: 0.08 });
-      hud.rect(bx, y, bw * f, 12).fill(TEAM[t].main);
+      gauge(bx, y - 2, bw, 16, f, t === 0 ? 'bar0' : 'bar1');
       L.put(`${TEAM[t].short} ${Math.floor(world.scores[t])}`, bx - 12, y + 6, 16, TEAM[t].css, 'right', true);
     }
     L.put(`to ${tune.target_score}  ·  round ${world.round}`, bx + bw + 12, by + 17, 15, '#aab4d4', 'left');
@@ -440,9 +488,9 @@ async function start(): Promise<void> {
     });
     const ew = 360, ex = W / 2 - ew / 2, ey = H - 40; // energy: your shield and your ammo
     const maxE = tune[`${p.hull}_energy`], ef = p.alive ? Math.max(0, p.energy / maxE) : 0, low = p.alive && ef < tune.low_energy_warn;
-    hud.rect(ex, ey, ew, 14).fill({ color: 0xffffff, alpha: 0.08 });
+    panel(P, ex - 150, ey - 14, ew + 340, 42);
     if (low) { // low energy is never colour alone: a hatched fill, a threshold tick and a warning glyph
-      hud.rect(ex, ey, ew * ef, 14).fill({ color: 0xff5a6a, alpha: 0.35 });
+      gauge(ex, ey - 2, ew, 18, ef, 'barLow');
       for (let hx = ex - 14; hx < ex + ew * ef; hx += 7) {
         const x0 = Math.max(ex, hx), x1 = Math.min(ex + ew * ef, hx + 14);
         if (x1 > x0) hud.moveTo(x0, ey + 14 - (x0 - hx)).lineTo(x1, ey + 14 - (x1 - hx));
@@ -452,15 +500,15 @@ async function start(): Promise<void> {
       hud.poly([gx, gy + 20, gx + 11, gy, gx + 22, gy + 20], true).stroke({ width: 2, color: 0xff5a6a, join: 'miter' });
       hud.moveTo(gx + 11, gy + 7).lineTo(gx + 11, gy + 13).stroke({ width: 2, color: 0xff5a6a });
       hud.rect(gx + 10, gy + 15, 2, 2).fill(0xff5a6a);
-    } else hud.rect(ex, ey, ew * ef, 14).fill(TEAM[p.team].main);
+    } else gauge(ex, ey - 2, ew, 18, ef, p.team === 0 ? 'bar0' : 'bar1');
     const tx = ex + ew * tune.low_energy_warn; // the threshold tick
     hud.moveTo(tx, ey - 4).lineTo(tx, ey + 18).stroke({ width: 2, color: low ? 0xff5a6a : 0x8590b4 });
-    hud.rect(ex, ey, ew, 14).stroke({ width: 1, color: TEAM[p.team].dim });
     L.put(`Energy ${Math.max(0, Math.round(p.energy))}`, ex - 12, ey + 7, 15, low ? '#ff5a6a' : TEAM[p.team].css, 'right', true);
     L.put(`${HULL_NAME[p.hull]} · ${WEAPON_NAME[p.weapon]}`, ex + ew + (low ? 46 : 12), ey + 7, 15, '#aab4d4', 'left');
     // the minimap: the whole zone
     const size = 170, mx = W - size - 16, my = H - size - 16, k = size / world.size;
-    hud.rect(mx, my, size, size).fill({ color: 0x060a18, alpha: 0.82 }).stroke({ width: 1, color: 0x2a3354 });
+    panel(P, mx - 8, my - 8, size + 16, size + 16, 0.92);
+    hud.rect(mx, my, size, size).fill({ color: 0x03040b, alpha: 0.7 });
     for (const a of world.asteroids) hud.rect(mx + a.x * k - 2, my + a.y * k - 2, 4, 4).fill(0x2f3757);
     for (const b of world.beacons) dashedRing(hud, mx + b.x * k, my + b.y * k, tune.beacon_radius * k + 2, ownerColor(b.owner), 1, 2);
     for (const sh of world.ships) if (sh.alive && sh.id !== ME) blip(hud, mx + sh.x * k, my + sh.y * k, sh.a, 3.2, TEAM[sh.team].main);
@@ -477,7 +525,7 @@ async function start(): Promise<void> {
     const hs = view.lowHint > 0 ? 'Low energy: ease off the trigger to recharge. At zero your ship is destroyed.' : hints[view.hint];
     if (hs && !world.roundOver && p.alive) {
       const w = L.width(hs, 17) + 36;
-      hud.rect(W / 2 - w / 2, H - 112, w, 36).fill({ color: 0x060a18, alpha: 0.85 }).stroke({ width: 1, color: TEAM[0].dim });
+      panel(P, W / 2 - w / 2, H - 114, w, 40);
       L.put(hs, W / 2, H - 94, 17, '#e6f6ff');
     }
     if (sound.muted) L.put('Muted', W - 100, H - 200, 14, '#8590b4');
@@ -493,7 +541,7 @@ async function start(): Promise<void> {
       T.put(`Next round in ${Math.ceil(world.roundOver)} s, right here (Enter to skip)`, W / 2, H / 2 + 46, 18, '#aab4d4');
       return;
     }
-    if (view.banner) {
+    if (view.banner && p.alive) {
       const b = view.banner;
       T.put(b.text, W / 2, 128, 28, b.team === undefined ? '#ffffff' : TEAM[b.team].css, 'center', true, Math.min(1, b.t * 2));
     }
@@ -505,16 +553,16 @@ async function start(): Promise<void> {
     T.put(`Relaunch in ${Math.max(0, p.respawn).toFixed(1)} s  ·  pick your loadout`, W / 2, 236, 20, '#aab4d4');
     HULLS.forEach((h, i) => {
       const x = W / 2 - 300 + i * 300, y = 340, sel = view.loadout.hull === h;
-      top.rect(x - 120, y - 70, 240, 140).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[p.team].main : 0x2a3354 });
-      drawShip(top, h, p.team, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: simT });
+      panel(TP, x - 120, y - 70, 240, 140, 0.95, sel ? (p.team === 0 ? 0x1f6a86 : 0x8a5a1c) : 0x26345c);
+      ship(TS, TS, top, h, p.team, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: simT, thrust: sel });
       T.put(`${i + 1}  ${HULL_NAME[h]}`, x, y + 40, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
       T.put(HULL_ROLE[h], x, y + 60, 14, '#8590b4');
     });
     WEAPONS.forEach((wp, i) => {
       const x = W / 2 - 300 + i * 300, y = 500, sel = view.loadout.weapon === wp;
-      top.rect(x - 120, y - 46, 240, 92).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[p.team].main : 0x2a3354 });
+      panel(TP, x - 120, y - 46, 240, 92, 0.95, sel ? (p.team === 0 ? 0x1f6a86 : 0x8a5a1c) : 0x26345c);
       const demo = { team: p.team, kind: wp, vx: 1, vy: 0 };
-      for (const dy of wp === 'scatter' ? [-14, 0, 14] : [0]) drawShot(top, demo, x + 30, y - 18 + dy, 1.4);
+      for (const dy of wp === 'scatter' ? [-14, 0, 14] : [0]) shotSprite(TS, demo.team, wp, 1, 0, x + 30, y - 18 + dy, 1.2, false, simT);
       T.put(`${'ZXC'[i]}  ${WEAPON_NAME[wp]}`, x, y + 10, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
       T.put(WEAPON_ROLE[wp], x, y + 30, 14, '#8590b4');
     });
@@ -522,15 +570,16 @@ async function start(): Promise<void> {
 
   function drawTitle(): void {
     const t = simT;
-    drawStars(t * 30, 0);
-    drawShip(g, 'lancer', 0, W / 2 - 330, 150, 0.2 + Math.sin(t) * 0.1, 30, { thrust: true, t });
-    drawShip(g, 'bulwark', 1, W / 2 + 330, 150, Math.PI - 0.2 + Math.sin(t) * 0.1, 28, { thrust: true, t });
-    drawBeacon(g, { owner: -1, progress: 0.4 + 0.3 * Math.sin(t), phase: 0 }, W / 2, 160, tune.beacon_radius * 0.42, 0.42, t);
+    drawStars(t * 30, t * 8);
+    ship(S, F, go, 'lancer', 0, W / 2 - 330, 150, 0.2 + Math.sin(t) * 0.1, 26, { thrust: true, t });
+    ship(S, F, go, 'bulwark', 1, W / 2 + 330, 150, Math.PI - 0.2 + Math.sin(t) * 0.1, 22, { thrust: true, t });
+    beacon({ owner: -1, progress: 0.4 + 0.3 * Math.sin(t), phase: 0 }, W / 2, 160, tune.beacon_radius * 0.42, 0.42, t);
     L.put(TITLE, W / 2, 268, 72, '#ffffff', 'center', true);
     L.put('Two fleets. Three drifting beacons. One wrap-around asteroid zone.', W / 2, 324, 20, '#aab4d4');
     MENU.forEach((m, i) => {
       const y = 410 + i * 50, sel = i === menuAt;
-      if (sel) { hud.rect(W / 2 - 300, y - 21, 600, 42).fill({ color: TEAM[0].main, alpha: 0.12 }).stroke({ width: 1, color: TEAM[0].main }); arrow(hud, W / 2 - 280, y, 0, 10, TEAM[0].main); }
+      panel(P, W / 2 - 300, y - 22, 600, 44, sel ? 0.95 : 0.55, sel ? 0x1f6a86 : 0x26345c);
+      if (sel) arrow(hud, W / 2 - 280, y, 0, 10, TEAM[0].main);
       L.put(m, W / 2, y, 24, sel ? '#ffffff' : '#aab4d4', 'center', sel);
     });
     L.put('Up / Down to choose, Enter to go  ·  a gamepad works too', W / 2, H - 70, 16, '#8590b4');
@@ -544,29 +593,29 @@ async function start(): Promise<void> {
     HULLS.forEach((h, i) => {
       for (const team of [0, 1] as Team[]) {
         const x = 160 + i * 190, y = 140 + team * 165;
-        drawShip(g, h, team, x, y, -Math.PI / 2, HULL_RADIUS[h] * 2.2, { t });
+        ship(S, F, go, h, team, x, y, -Math.PI / 2, HULL_RADIUS[h] * 2.2, { t, thrust: true });
         L.put(`${HULL_NAME[h]} (${team ? 'amber' : 'cyan'})`, x, y + (h === 'bulwark' ? 70 : 60), 15, TEAM[team].css);
       }
     });
-    drawShip(g, 'lancer', 0, 760, 150, -Math.PI / 2, HULL_RADIUS.lancer * 2.2, { you: true, t });
+    ship(S, F, go, 'lancer', 0, 760, 150, -Math.PI / 2, HULL_RADIUS.lancer * 2.2, { you: true, t });
     L.put('You (white chevron)', 760, 216, 15, '#ffffff');
-    drawShip(g, 'dart', 1, 760, 320, -Math.PI / 2, HULL_RADIUS.dart * 2.2, { t, low: true });
+    ship(S, F, go, 'dart', 1, 760, 320, -Math.PI / 2, HULL_RADIUS.dart * 2.2, { t, low: true });
     L.put('Low energy (dashed)', 760, 380, 15, TEAM[1].css);
     const bs = 0.4, bR = tune.beacon_radius * bs;
-    drawBeacon(g, { owner: 0, progress: 1, phase: 0 }, 960, 180, bR, bs, t);
+    beacon({ owner: 0, progress: 1, phase: 0 }, 960, 180, bR, bs, t);
     L.put('Beacon (held)', 960, 180 - bR - 22, 15, TEAM[0].css, 'center', true);
-    drawBeacon(g, { owner: 1, progress: -0.45, phase: 2 }, 1160, 180, bR, bs, t);
+    beacon({ owner: 1, progress: -0.45, phase: 2 }, 1160, 180, bR, bs, t);
     L.put('Beacon (being taken)', 1160, 180 - bR - 22, 15, TEAM[1].css, 'center', true);
-    drawBeacon(g, { owner: -1, progress: 0, phase: 1 }, 1060, 470, bR, bs, t);
+    beacon({ owner: -1, progress: 0, phase: 1 }, 1060, 470, bR, bs, t);
     L.put('Beacon (neutral)', 1060, 470 - bR - 22, 15, '#9aa4c4', 'center', true);
     const shape: [number, number][] = []; let s2 = 3;
     for (let i = 0; i < 11; i++) { s2 = (s2 * 16807) % 2147483647; shape.push([(i / 11) * Math.PI * 2, 0.8 + (s2 / 2147483647) * 0.3]); }
-    drawAsteroid(g, { x: 0, y: 0, r: 60, shape, cracks: [[-0.2, -0.1, 0.18], [0.25, 0.2, 0.14]], spin: 0 }, 160, 490, 1);
+    rockSprite(S, { x: 0, y: 0, r: 60, shape, cracks: [], spin: 0 }, 160, 490, 1, 0);
     L.put('Asteroid', 160, 570, 15, '#aab4d4');
-    drawMine(g, { team: 1 }, true, 350, 490, 2, t); L.put('Mine', 350, 570, 15, TEAM[1].css);
+    mineSprite(S, F, 1, true, 350, 490, 2, t, settings.calm); L.put('Mine', 350, 570, 15, TEAM[1].css);
     WEAPONS.forEach((k, i) => {
       const team = (i === 2 ? 1 : 0) as Team;
-      drawShot(g, { team, kind: k, vx: 1, vy: 0 }, 540 + i * 140, 490, 2);
+      shotSprite(F, team, k, 1, 0, 540 + i * 140, 490, 1.6, false, t);
       L.put(WEAPON_NAME[k], 520 + i * 140, 570, 15, TEAM[team].css);
     });
   }
@@ -576,7 +625,7 @@ async function start(): Promise<void> {
     L.put('Settings', W / 2, 90, 48, '#ffffff', 'center', true);
     SETTINGS_ROWS.forEach((r, i) => {
       const y = 170 + i * 54, sel = i === setAt;
-      if (sel) hud.rect(W / 2 - 380, y - 24, 760, 48).fill({ color: TEAM[0].main, alpha: 0.12 }).stroke({ width: 1, color: TEAM[0].main });
+      panel(P, W / 2 - 380, y - 24, 760, 48, sel ? 0.95 : 0.5, sel ? 0x1f6a86 : 0x26345c);
       L.put(r, W / 2 - 350, y, 22, sel ? '#ffffff' : '#aab4d4', 'left', sel);
       const v = settingText(i) + (typing && sel ? '_' : '');
       L.put(v, W / 2 + 350, y, 22, sel ? TEAM[0].css : '#d8deef', 'right', true);
@@ -600,6 +649,7 @@ async function start(): Promise<void> {
     lines.forEach((l, i) => L.put(l, W / 2, 140 + i * 36, 18, '#d8deef'));
     CONTROLS.forEach((c, i) => L.put(c, W / 2, 460 + i * 32, 17, '#aab4d4'));
     L.put('Gamepad: stick turns, A thrusts, X fires, LB afterburns, B drops a mine; respawning, X and Y pick the loadout', W / 2, 600, 16, '#8590b4');
+    L.put('Art: Kenney (kenney.nl), CC0', W / 2, 640, 14, '#8590b4');
     L.put('Enter to go back', W / 2, H - 50, 20, TEAM[0].css, 'center', true);
   }
   function drawNet(): void {
@@ -615,7 +665,7 @@ async function start(): Promise<void> {
     }
   }
   function drawScoreboard(): void {
-    top.rect(W / 2 - 430, 110, 860, 480).fill({ color: 0x03040b, alpha: 0.9 }).stroke({ width: 1, color: 0x2a3354 });
+    panel(TP, W / 2 - 430, 110, 860, 480, 0.96);
     T.put('Scoreboard', W / 2, 140, 26, '#ffffff', 'center', true);
     for (const team of [0, 1] as Team[]) {
       const x = W / 2 - 410 + team * 430;
@@ -638,7 +688,7 @@ async function start(): Promise<void> {
       glowK = world.winner === me().team ? 1 + 0.6 * e : 1 - 0.55 * e;
     }
     bloom.alpha = (settings.calm ? 0.45 : 0.9) * (settings.calm ? Math.min(1, glowK) : glowK);
-    g.clear(); hud.clear(); top.clear(); L.begin(); T.begin();
+    g.clear(); gb.clear(); go.clear(); hud.clear(); top.clear(); L.begin(); T.begin(); S.begin(); F.begin(); TS.begin(); P.begin(); TP.begin();
     if (scene === 'title') drawTitle();
     else if (scene === 'settings') drawSettings();
     else if (scene === 'help') drawHelp();
@@ -654,8 +704,8 @@ async function start(): Promise<void> {
       if (held('Tab') && scene === 'play') drawScoreboard();
       if (net && scene === 'play') L.put(`online  ·  ${net.ping} ms`, 20, 72, 14, '#8590b4', 'left');
     }
-    L.end(); T.end();
-    app.renderer.render({ container: g, target: lit, clear: true });
+    L.end(); T.end(); S.end(); F.end(); TS.end(); P.end(); TP.end();
+    if (bloom.visible) app.renderer.render({ container: lit, target: glowRT, clear: true });
   }
   function fit(): void {
     const k = Math.min(innerWidth / W, innerHeight / H);

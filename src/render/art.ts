@@ -115,7 +115,8 @@ export function dashedRing(g: Graphics, x: number, y: number, R: number, color: 
  * team colour on the void around it. Neutral: thin grey arcs and a hollow core. Held: the owner's
  * arcs, wash and glyph. Being taken from its owner: the arcs alternate colours and the wash splits.
  */
-export function drawBeacon(g: Graphics, b: Pick<Beacon, 'owner' | 'progress' | 'phase'>, x: number, y: number, R: number, scale: number, t: number): void {
+export function drawBeacon(g: Graphics, b: Pick<Beacon, 'owner' | 'progress' | 'phase'>, x: number, y: number, R: number, scale: number, t: number, o: { under?: Graphics; core?: boolean } = {}): void {
+  const ug = o.under ?? g, core = o.core ?? true;
   const col = ownerColor(b.owner);
   // a held beacon sits at full progress for its owner; anything less means the other fleet is draining it
   const draining = b.owner !== -1 && Math.abs(b.progress) < 0.999;
@@ -127,8 +128,8 @@ export function drawBeacon(g: Graphics, b: Pick<Beacon, 'owner' | 'progress' | '
   const wash = (color: number, a0: number, a1: number, k: number) => {
     for (let i = 0; i < 9; i++) {
       const r = R * (2.2 - i * 0.2);
-      if (a1 - a0 >= Math.PI * 2) g.circle(x, y, r); else g.moveTo(x, y).arc(x, y, r, a0, a1).closePath();
-      g.fill({ color, alpha: 0.022 * k });
+      if (a1 - a0 >= Math.PI * 2) ug.circle(x, y, r); else ug.moveTo(x, y).arc(x, y, r, a0, a1).closePath();
+      ug.fill({ color, alpha: 0.022 * k });
     }
   };
   if (contested && b.owner !== -1) {
@@ -150,13 +151,16 @@ export function drawBeacon(g: Graphics, b: Pick<Beacon, 'owner' | 'progress' | '
     g.moveTo(x + Math.cos(a0) * Rf, y + Math.sin(a0) * Rf).arc(x, y, Rf, a0, a0 + Math.PI * 2 * Math.abs(b.progress))
       .stroke({ width: 5, color: TEAM[b.progress > 0 ? 0 : 1].main });
   }
-  const hex = pts(HEX, x, y, t * 0.4 + b.phase, 30 * scale);
-  g.poly(hex, true).fill({ color: INK, alpha: 0.9 });
-  glow(g, () => g.poly(hex, true), col, 2, true);
+  const gs = core ? 13 : 9;
+  if (core) {
+    const hex = pts(HEX, x, y, t * 0.4 + b.phase, 30 * scale);
+    g.poly(hex, true).fill({ color: INK, alpha: 0.9 });
+    glow(g, () => g.poly(hex, true), col, 2, true);
+  }
   if (b.owner === -1) { // neutral: a hollow core
-    g.poly(pts(DIAMOND, x, y, -t * 0.6, 13 * scale), true).stroke({ width: 2, color: col });
+    g.poly(pts(DIAMOND, x, y, -t * 0.6, gs * scale), true).stroke({ width: 2, color: col });
   } else { // held: the owner's glyph, lit on the pulse
-    g.poly(pts(TEAM_GLYPH[b.owner], x, y, -Math.PI / 2, (13 + 5 * pulse) * scale), true).fill(col);
+    g.poly(pts(TEAM_GLYPH[b.owner], x, y, -Math.PI / 2, (gs + 4 * pulse) * scale), true).fill(col).stroke({ width: 1.5, color: INK });
   }
 }
 
