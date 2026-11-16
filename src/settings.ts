@@ -1,0 +1,33 @@
+// Player settings, kept in this browser between visits. Never gameplay state: a setting that
+// changes play (bot skill, fleet size) only scales the tuning a new zone starts with.
+
+import type { Tuning } from './game/types';
+
+export interface Settings {
+  volume: number;       // 0..1
+  zoom: number;         // camera scale
+  skill: 0 | 1 | 2;     // bot skill: easy, normal, hard
+  fleet: number;        // ships per fleet, you included
+  server: string;       // the online zone's address
+  name: string;         // your call sign online
+}
+export const SKILL_NAMES = ['Easy', 'Normal', 'Hard'] as const;
+const KEY = 'beacon-wars-settings';
+
+export function defaults(t: Tuning): Settings {
+  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot' };
+}
+export function load(t: Tuning): Settings {
+  const d = defaults(t);
+  try { return { ...d, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings>) }; } catch { return d; }
+}
+export function save(s: Settings): void {
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private window: settings last this visit only */ }
+}
+/** The tuning a zone starts with under these settings. */
+export function apply(base: Tuning, s: Settings): Tuning {
+  const t = { ...base, zoom: s.zoom, volume: s.volume, fleet_size: s.fleet };
+  const k = [base.skill_easy, 1, base.skill_hard][s.skill]; // aim wobble and reaction time scale by skill
+  t.bot_aim_error *= k; t.bot_aim_error_late *= k; t.bot_reaction *= k;
+  return t;
+}

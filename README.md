@@ -1,19 +1,33 @@
-# Space Wars (working title)
+# Beacon Wars (working title)
 
 A modern, original top-down multiplayer space-combat game for Steam, in the spirit of the classic 2D space arena
 shooters. Built with TypeScript, Vite and PixiJS 8, and developed with a Claude Code game-studio workspace.
 
+## The game
+
+Two fleets of drift-and-thrust ships fight over three drifting beacons in a wrap-around asteroid zone. Hold a beacon
+and your fleet scores; first fleet to the target wins the round, and the zone starts the next one in place. Energy is
+your shield and your ammo. Every seat no person holds is flown by a bot, named as a bot, and a bot steps out when a
+person joins. The design is the one-page brief, `design/game-brief.md`.
+
 ## Play and test
 
 ```bash
-npm ci           # install the pinned versions
-npm run dev      # play while working (Vite dev server)
-npm test         # Vitest unit tests, then Playwright on the single-file build
-npm run build    # production build in dist/
+npm ci               # install the pinned versions
+npm run dev          # play while working (Vite dev server); "Play the zone offline" needs nothing else
+npm run server       # run an online zone on ws://localhost:8787; then "Join an online zone" in the menu
+npm test             # Vitest (rules, wire format, server), then Playwright on the single-file build
+npm run build        # production build in dist/
+npm run build:single # one self-contained dist-single/index.html
 ```
 
-Right now the game is the template's starter (a title screen and a moving square). The real game starts with the
-concept: run `/brainstorm` or `/start` in Claude Code.
+| Folder | What is there |
+|---|---|
+| `src/game/` | The rules: pure, deterministic TypeScript (flight, weapons, beacons, rounds, bots, seats). Runs in the browser and on the server. |
+| `src/net/`, `server/` | The online zone: wire format, browser client, Node server (`docs/architecture/adr-0001-online-zone.md`). |
+| `src/main.ts`, `src/render/` | The client: scenes, HUD, camera and the neon vector art, drawn with PixiJS 8. |
+| `data/config.json` | Every tuning value (speeds, energy, weapons, beacons, bots), each with its range. |
+| `prototypes/beacon-wars/` | The first one-file prototype, kept as it was built. |
 
 ## The studio workspace
 

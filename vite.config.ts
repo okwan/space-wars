@@ -21,6 +21,6 @@ export default defineConfig(({ mode }) => ({
     emptyOutDir: true,
   },
   test: {
-    include: ['tests/unit/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/server/**/*.test.ts'],
   },
 }));

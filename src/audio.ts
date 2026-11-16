@@ -7,7 +7,7 @@ export class Sound {
   private ac: AudioContext | null = null;
   private out: GainNode | null = null;
   muted = false;
-  constructor(private volume: number) {}
+  constructor(public volume: number) {}
 
   /** Starts (or resumes) audio; call on a key or pointer gesture. */
   start(): void {

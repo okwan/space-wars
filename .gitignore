@@ -178,3 +178,4 @@ $RECYCLE.BIN/
 dist-single/
 .vitest/
 /playwright-report/
+dist-server/

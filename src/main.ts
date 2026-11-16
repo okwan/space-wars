@@ -5,6 +5,9 @@
 import { Application, Container, Graphics, Text, type TextStyleFontWeight } from 'pixi.js';
 import config from '../data/config.json';
 import { Sound } from './audio';
+import { readPad, type PadState } from './gamepad';
+import { NetSession } from './net/client';
+import { apply, load, save, SKILL_NAMES, type Settings } from './settings';
 import { dist, wd, wrap } from './game/math';
 import { skipBreak, startRound, step as simStep, STEP } from './game/sim';
 import { tuningFrom } from './game/tuning';
@@ -16,25 +19,31 @@ import {
   HULL_NAME, HULL_ROLE, INK, ownerColor, ownerCss, TEAM, WEAPON_NAME, WEAPON_ROLE,
 } from './render/art';
 
-const tune = tuningFrom(config);
+const base = tuningFrom(config);
+let settings: Settings = load(base);
+let tune = apply(base, settings);
 const W = 1280, H = 720;
 const FONT = '"Trebuchet MS", "Segoe UI", sans-serif';
 const TITLE = 'Beacon Wars';
-const ME = 0; // the local player's ship id
+let ME = 0; // the local player's ship id (online, the seat the server gave)
+let net: NetSession | null = null;
 const CONTROLS = [
   'Left / Right (or A / D): turn     Up (or W): thrust     Down (or S): reverse',
   'Space: fire     Shift: afterburn     E: drop a mine',
   'While respawning: 1 / 2 / 3 pick a hull, Z / X / C pick a weapon',
-  'P: pause     M: mute',
+  'Tab: scoreboard     P: pause     M: mute',
 ];
 
 // ---- Input: keys by position (event.code), OS key repeat ignored ------------------------
 const down = new Set<string>(), hit = new Set<string>();
 const pressed = (code: string): boolean => hit.has(code);
+addEventListener('keydown', e => { if (e.code === 'Tab') e.preventDefault(); });
 const held = (...codes: string[]): boolean => codes.some(c => down.has(c));
-const sound = new Sound(config.volume.value);
+const sound = new Sound(settings.volume);
+let typing: ((key: string) => void) | null = null; // a text field taking keys
 addEventListener('keydown', e => {
   sound.start();
+  if (typing) { typing(e.key); e.preventDefault(); return; }
   if (!e.repeat) { down.add(e.code); hit.add(e.code); }
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
 });
@@ -53,25 +62,41 @@ interface View {
 }
 let scene = '', world: World, view: View;
 const log: GameEvent[] = []; // window.game.events
-function reset(): void {
-  world = newWorld(tune, { seed: seedFrom(config.seed), humans: [ME] });
-  startRound(world, tune);
-  world.events = [];
+function newView(): void {
   const me = world.ships[ME];
   view = {
     cam: { x: me.x, y: me.y }, shake: 0, sparks: [], feed: [], banner: { text: 'Round 1: take the beacons', t: 3 },
     hint: 0, hintT: 0, thrustTime: 0, turned: false, loadout: { hull: me.hull, weapon: me.weapon },
   };
 }
+/** A new offline zone: you and bots. */
+function reset(): void {
+  net?.close(); net = null; ME = 0;
+  tune = apply(base, settings);
+  world = newWorld(tune, { seed: seedFrom(config.seed), humans: [ME] });
+  startRound(world, tune);
+  world.events = [];
+  newView();
+}
 const me = (): Ship => world.ships[ME];
 
+let padWas: PadState | null = null;
 function myInput(): ShipInput {
   const l = view.loadout;
   for (const [i, k] of ['Digit1', 'Digit2', 'Digit3'].entries()) if (pressed(k)) l.hull = HULLS[i];
   for (const [i, k] of ['KeyZ', 'KeyX', 'KeyC'].entries()) if (pressed(k)) l.weapon = WEAPONS[i];
+  const pad = readPad(), was = padWas;
+  padWas = pad;
+  if (pad) {
+    if (pad.x && !was?.x) l.hull = HULLS[(HULLS.indexOf(l.hull) + 1) % 3];
+    if (pad.y && !was?.y) l.weapon = WEAPONS[(WEAPONS.indexOf(l.weapon) + 1) % 3];
+  }
+  const p = pad && !me().alive ? null : pad; // while respawning, X and Y pick the loadout
   return {
-    left: held('ArrowLeft', 'KeyA'), right: held('ArrowRight', 'KeyD'), thrust: held('ArrowUp', 'KeyW'),
-    rev: held('ArrowDown', 'KeyS'), fire: held('Space'), burn: held('ShiftLeft', 'ShiftRight'), mine: pressed('KeyE'),
+    left: held('ArrowLeft', 'KeyA') || !!p?.left, right: held('ArrowRight', 'KeyD') || !!p?.right,
+    thrust: held('ArrowUp', 'KeyW') || !!p?.thrust, rev: held('ArrowDown', 'KeyS') || !!p?.rev,
+    fire: held('Space') || !!p?.fire, burn: held('ShiftLeft', 'ShiftRight') || !!p?.burn,
+    mine: pressed('KeyE') || (!!p?.mine && !was?.mine),
     hull: l.hull, weapon: l.weapon,
   };
 }
@@ -101,12 +126,12 @@ function react(events: GameEvent[]): void {
       case 'mine': if (e.ship === ME) sound.mine(); break;
       case 'capture': {
         const b = world.beacons[e.beacon];
-        if (e.team === 0) { sound.capture(); view.banner = { text: `${b.label} is ours`, t: 2.2, team: 0 }; }
-        else if (e.from === 0) { sound.lost(); view.banner = { text: `${b.label} lost`, t: 2.2, team: 1 }; }
+        if (e.team === me().team) { sound.capture(); view.banner = { text: `${b.label} is ours`, t: 2.2, team: me().team }; }
+        else if (e.from === me().team) { sound.lost(); view.banner = { text: `${b.label} lost`, t: 2.2, team: (1 - me().team) as Team }; }
         break;
       }
       case 'group': view.banner = { text: 'The amber fleet is moving as one', t: 3, team: 1 }; break;
-      case 'round': (e.winner === 0 ? sound.win() : sound.lost()); break;
+      case 'round': (e.winner === me().team ? sound.win() : sound.lost()); break;
       case 'roundStart': view.banner = { text: `Round ${e.round}: go`, t: 3 }; break;
     }
   }
@@ -116,15 +141,22 @@ function updatePlay(dt: number): void {
   const input = myInput();
   if (input.left || input.right) view.turned = true;
   if (input.thrust && me().alive) view.thrustTime += dt;
-  if (pressed('Enter')) skipBreak(world, tune);
-  simStep(world, new Map([[ME, input]]), tune, dt);
-  react(world.events); world.events = [];
+  if (net) {
+    net.step(input, dt);
+    if (net.world) world = net.world;
+    react(net.drain());
+    if (net.status === 'closed') { scene = 'net'; return; }
+  } else {
+    if (pressed('Enter')) skipBreak(world, tune);
+    simStep(world, new Map([[ME, input]]), tune, dt);
+    react(world.events); world.events = [];
+  }
   // first-minute hints, taught by doing
   const p = me();
   view.hintT += dt;
   if (view.hint === 0 && view.thrustTime > 1.2 && view.turned) { view.hint = 1; view.hintT = 0; }
   if (view.hint === 1 && (world.beacons.some(b => dist(p, b, world.size) < 450) || view.hintT > 25)) { view.hint = 2; view.hintT = 0; }
-  if (view.hint === 2 && (world.beacons.some(b => b.owner === 0 && dist(p, b, world.size) < tune.beacon_radius) || view.hintT > 35)) { view.hint = 3; view.hintT = 0; }
+  if (view.hint === 2 && (world.beacons.some(b => b.owner === p.team && dist(p, b, world.size) < tune.beacon_radius) || view.hintT > 35)) { view.hint = 3; view.hintT = 0; }
   if (view.hint === 3 && view.hintT > 9) view.hint = 4;
   for (const f of view.feed) f.t -= dt;
   view.feed = view.feed.filter(f => f.t > 0);
@@ -139,16 +171,97 @@ function updatePlay(dt: number): void {
   view.cam.y = wrap(view.cam.y + wd(view.cam.y, ly, world.size) * k, world.size);
 }
 
+/** The title menu, the settings list and the online join flow. */
+const MENU = ['Play the zone offline (you and bots)', 'Join an online zone', 'Settings', 'How to play'] as const;
+let menuAt = 0, setAt = 0, padMenuWas: PadState | null = null;
+/** Menu keys from the keyboard or a pad: up, down, left, right, choose, back. */
+function menuKeys(): { up: boolean; down: boolean; left: boolean; right: boolean; ok: boolean; back: boolean } {
+  const p = readPad(), w = padMenuWas; padMenuWas = p;
+  const edge = (k: keyof PadState) => !!p?.[k] && !w?.[k];
+  return {
+    up: pressed('ArrowUp') || pressed('KeyW') || edge('up'), down: pressed('ArrowDown') || pressed('KeyS') || edge('down'),
+    left: pressed('ArrowLeft') || pressed('KeyA') || edge('left'), right: pressed('ArrowRight') || pressed('KeyD') || edge('right'),
+    ok: pressed('Enter') || pressed('Space') || edge('a') || edge('start'), back: pressed('Escape') || pressed('Backspace') || edge('b'),
+  };
+}
+const SETTINGS_ROWS = ['Volume', 'Camera zoom', 'Bot skill', 'Fleet size (offline)', 'Call sign (online)', 'Zone address (online)', 'Back'] as const;
+function settingText(i: number): string {
+  const s = settings;
+  return [`${Math.round(s.volume * 100)}%`, `${s.zoom.toFixed(2)}x`, SKILL_NAMES[s.skill], `${s.fleet} a side`, s.name, s.server, ''][i];
+}
+function changeSetting(i: number, d: number): void {
+  const s = settings, c = config;
+  const step2 = (v: number, e: { min: number; max: number; step: number }) => Math.round(Math.min(e.max, Math.max(e.min, v + d * e.step)) * 1000) / 1000;
+  if (i === 0) { s.volume = step2(s.volume, c.volume); sound.volume = s.volume; sound.setMuted(sound.muted); }
+  if (i === 1) s.zoom = step2(s.zoom, c.zoom);
+  if (i === 2) s.skill = Math.min(2, Math.max(0, s.skill + d)) as Settings['skill'];
+  if (i === 3) s.fleet = step2(s.fleet, { ...c.fleet_size, min: 2, max: 20 });
+  save(s);
+}
+function editText(field: 'name' | 'server', max: number): void {
+  typing = key => {
+    if (key === 'Enter' || key === 'Escape') { typing = null; hit.clear(); save(settings); return; }
+    if (key === 'Backspace') settings[field] = settings[field].slice(0, -1);
+    else if (key.length === 1 && settings[field].length < max) settings[field] += key;
+  };
+}
+function joinOnline(): void {
+  net?.close();
+  net = new NetSession(settings.server, settings.name);
+  scene = 'net';
+}
+
 let simT = 0; // seconds since the page started, on the fixed step (drives title and figure animation)
 const scenes: Record<string, { update(dt: number): void }> = {
-  title: { update() { if (pressed('Enter') || pressed('Space')) { reset(); scene = 'play'; } } },
+  title: {
+    update() {
+      const k = menuKeys();
+      if (k.up) menuAt = (menuAt + MENU.length - 1) % MENU.length;
+      if (k.down) menuAt = (menuAt + 1) % MENU.length;
+      if (!k.ok) return;
+      if (menuAt === 0) { reset(); scene = 'play'; }
+      else if (menuAt === 1) joinOnline();
+      else if (menuAt === 2) { setAt = 0; scene = 'settings'; }
+      else scene = 'help';
+    },
+  },
+  settings: {
+    update() {
+      if (typing) return;
+      const k = menuKeys();
+      if (k.up) setAt = (setAt + SETTINGS_ROWS.length - 1) % SETTINGS_ROWS.length;
+      if (k.down) setAt = (setAt + 1) % SETTINGS_ROWS.length;
+      if (k.left) changeSetting(setAt, -1);
+      if (k.right) changeSetting(setAt, 1);
+      if (k.ok && setAt === 4) editText('name', 16);
+      else if (k.ok && setAt === 5) editText('server', 80);
+      else if (k.back || (k.ok && setAt === SETTINGS_ROWS.length - 1)) scene = 'title';
+    },
+  },
+  help: { update() { const k = menuKeys(); if (k.ok || k.back) scene = 'title'; } },
+  net: {
+    update() {
+      const k = menuKeys();
+      if (!net || net.status === 'closed') { if (k.ok || k.back) { net?.close(); net = null; scene = 'title'; } return; }
+      if (k.back) { net.close(); net = null; scene = 'title'; return; }
+      if (net.status === 'online' && net.world && net.tune) {
+        world = net.world; tune = { ...net.tune, zoom: settings.zoom, volume: settings.volume }; ME = net.you; newView(); scene = 'play';
+      }
+    },
+  },
   play: {
     update(dt) {
-      if (pressed('KeyP') || pressed('Escape')) { scene = 'pause'; return; }
+      if (pressed('KeyP') || pressed('Escape') || (readPad()?.start && !padWas?.start)) { scene = 'pause'; return; }
       updatePlay(dt);
     },
   },
-  pause: { update() { if (pressed('KeyP') || pressed('Escape')) scene = 'play'; } },
+  pause: {
+    update(dt) {
+      if (net) updatePlay(dt); // an online zone never stops: you are still in it
+      if (pressed('KeyP') || pressed('Escape')) scene = 'play';
+      if (pressed('KeyQ')) { net?.close(); net = null; scene = 'title'; }
+    },
+  },
   figures: { update() { /* a still sheet of every figure */ } },
 };
 function step(): void {
@@ -279,8 +392,11 @@ async function start(): Promise<void> {
     }
     L.put(`to ${tune.target_score}  ·  round ${world.round}`, bx + bw + 12, by + 17, 15, '#aab4d4', 'left');
     world.beacons.forEach((b, i) => diamond(hud, W / 2 - 60 + i * 60, by + 62, 12, ownerColor(b.owner)));
-    const humans = world.ships.filter(s => s.human).length, n = tune.fleet_size;
-    L.put(`You + ${n - humans} bots  vs  ${n} bots`, 20, 24, 15, '#aab4d4', 'left');
+    const fleetLine = (t: Team) => {
+      const ships = world.ships.filter(s => s.team === t), people = ships.filter(s => s.human).length;
+      return people ? `${people} ${people === 1 ? 'pilot' : 'pilots'} + ${ships.length - people} bots` : `${ships.length} bots`;
+    };
+    L.put(`${fleetLine(p.team)}  vs  ${fleetLine((1 - p.team) as Team)}`, 20, 24, 15, '#aab4d4', 'left');
     L.put(`Your kills ${p.kills}  ·  deaths ${p.deaths}`, 20, 46, 15, '#aab4d4', 'left');
     view.feed.forEach((f, i) => { // who downed who, in each pilot's fleet colour
       const y = 26 + i * 24, x = W - 20, al = Math.min(1, f.t);
@@ -293,9 +409,9 @@ async function start(): Promise<void> {
     const ew = 360, ex = W / 2 - ew / 2, ey = H - 40; // energy: your shield and your ammo
     const maxE = tune[`${p.hull}_energy`], ef = p.alive ? Math.max(0, p.energy / maxE) : 0, low = ef < 0.3;
     hud.rect(ex, ey, ew, 14).fill({ color: 0xffffff, alpha: 0.08 });
-    hud.rect(ex, ey, ew * ef, 14).fill(low ? 0xff5a6a : TEAM[0].main);
-    hud.rect(ex, ey, ew, 14).stroke({ width: 1, color: TEAM[0].dim });
-    L.put(`Energy ${Math.max(0, Math.round(p.energy))}`, ex - 12, ey + 7, 15, low ? '#ff5a6a' : TEAM[0].css, 'right', true);
+    hud.rect(ex, ey, ew * ef, 14).fill(low ? 0xff5a6a : TEAM[p.team].main);
+    hud.rect(ex, ey, ew, 14).stroke({ width: 1, color: TEAM[p.team].dim });
+    L.put(`Energy ${Math.max(0, Math.round(p.energy))}`, ex - 12, ey + 7, 15, low ? '#ff5a6a' : TEAM[p.team].css, 'right', true);
     L.put(`${HULL_NAME[p.hull]} · ${WEAPON_NAME[p.weapon]}`, ex + ew + 12, ey + 7, 15, '#aab4d4', 'left');
     // the minimap: the whole zone
     const size = 170, mx = W - size - 16, my = H - size - 16, k = size / world.size;
@@ -327,7 +443,7 @@ async function start(): Promise<void> {
     if (world.roundOver) {
       top.rect(0, H / 2 - 110, W, 220).fill({ color: 0x03040b, alpha: 0.7 });
       const win = world.winner === 0 ? 0 : 1;
-      T.put(win === 0 ? 'Cyan fleet wins the round' : 'Amber fleet takes the round', W / 2, H / 2 - 50, 48, TEAM[win].css, 'center', true);
+      T.put(`${TEAM[win].name} ${win === p.team ? 'wins the round' : 'takes the round'}`, W / 2, H / 2 - 50, 48, TEAM[win].css, 'center', true);
       T.put(`Rounds won: Cyan ${world.roundsWon[0]}  ·  Amber ${world.roundsWon[1]}`, W / 2, H / 2 + 6, 20, '#d8deef');
       T.put(`Next round in ${Math.ceil(world.roundOver)} s, right here (Enter to skip)`, W / 2, H / 2 + 46, 18, '#aab4d4');
       return;
@@ -338,21 +454,21 @@ async function start(): Promise<void> {
     }
     if (p.alive) return;
     top.rect(0, 0, W, H).fill({ color: 0x03040b, alpha: 0.72 });
-    T.put('Destroyed', W / 2, 150, 44, TEAM[0].css, 'center', true);
+    T.put('Destroyed', W / 2, 150, 44, TEAM[p.team].css, 'center', true);
     const by = p.lastHitBy >= 0 ? world.ships[p.lastHitBy] : undefined;
     T.put(by ? `by ${by.name} flying a ${HULL_NAME[by.hull]} with ${WEAPON_NAME[by.weapon]}` : 'by the rocks', W / 2, 196, 18, '#d8deef');
     T.put(`Relaunch in ${Math.max(0, p.respawn).toFixed(1)} s  ·  pick your loadout`, W / 2, 236, 20, '#aab4d4');
     HULLS.forEach((h, i) => {
       const x = W / 2 - 300 + i * 300, y = 340, sel = view.loadout.hull === h;
-      top.rect(x - 120, y - 70, 240, 140).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[0].main : 0x2a3354 });
-      drawShip(top, h, 0, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: simT });
+      top.rect(x - 120, y - 70, 240, 140).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[p.team].main : 0x2a3354 });
+      drawShip(top, h, p.team, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: simT });
       T.put(`${i + 1}  ${HULL_NAME[h]}`, x, y + 40, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
       T.put(HULL_ROLE[h], x, y + 60, 14, '#8590b4');
     });
     WEAPONS.forEach((wp, i) => {
       const x = W / 2 - 300 + i * 300, y = 500, sel = view.loadout.weapon === wp;
-      top.rect(x - 120, y - 46, 240, 92).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[0].main : 0x2a3354 });
-      const demo = { team: 0 as Team, kind: wp, vx: 1, vy: 0 };
+      top.rect(x - 120, y - 46, 240, 92).fill({ color: INK, alpha: 0.6 }).stroke({ width: sel ? 2 : 1, color: sel ? TEAM[p.team].main : 0x2a3354 });
+      const demo = { team: p.team, kind: wp, vx: 1, vy: 0 };
       for (const dy of wp === 'scatter' ? [-14, 0, 14] : [0]) drawShot(top, demo, x + 30, y - 18 + dy, 1.4);
       T.put(`${'ZXC'[i]}  ${WEAPON_NAME[wp]}`, x, y + 10, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
       T.put(WEAPON_ROLE[wp], x, y + 30, 14, '#8590b4');
@@ -367,9 +483,13 @@ async function start(): Promise<void> {
     drawBeacon(g, { owner: -1, progress: 0.4 + 0.3 * Math.sin(t), phase: 0 }, W / 2, 160, tune.beacon_radius * 0.42, 0.42, t);
     L.put(TITLE, W / 2, 268, 72, '#ffffff', 'center', true);
     L.put('Two fleets. Three drifting beacons. One wrap-around asteroid zone.', W / 2, 324, 20, '#aab4d4');
-    CONTROLS.forEach((c, i) => L.put(c, W / 2, 400 + i * 34, 18, '#d8deef'));
-    L.put('Every other ship is a bot, named as a bot, until people join.', W / 2, 560, 16, '#8590b4');
-    L.put('Enter to launch', W / 2, H - 80, 30, TEAM[0].css, 'center', true);
+    MENU.forEach((m, i) => {
+      const y = 410 + i * 50, sel = i === menuAt;
+      if (sel) { hud.rect(W / 2 - 300, y - 21, 600, 42).fill({ color: TEAM[0].main, alpha: 0.12 }).stroke({ width: 1, color: TEAM[0].main }); arrow(hud, W / 2 - 280, y, 0, 10, TEAM[0].main); }
+      L.put(m, W / 2, y, 24, sel ? '#ffffff' : '#aab4d4', 'center', sel);
+    });
+    L.put('Up / Down to choose, Enter to go  ·  a gamepad works too', W / 2, H - 70, 16, '#8590b4');
+    L.put('Every other ship is a bot, named as a bot, until people join.', W / 2, H - 40, 16, '#8590b4');
   }
 
   function drawFigures(): void {
@@ -401,17 +521,81 @@ async function start(): Promise<void> {
     });
   }
 
+  function drawSettings(): void {
+    drawStars(simT * 20, 0);
+    L.put('Settings', W / 2, 90, 48, '#ffffff', 'center', true);
+    SETTINGS_ROWS.forEach((r, i) => {
+      const y = 190 + i * 58, sel = i === setAt;
+      if (sel) hud.rect(W / 2 - 380, y - 24, 760, 48).fill({ color: TEAM[0].main, alpha: 0.12 }).stroke({ width: 1, color: TEAM[0].main });
+      L.put(r, W / 2 - 350, y, 22, sel ? '#ffffff' : '#aab4d4', 'left', sel);
+      const v = settingText(i) + (typing && sel ? '_' : '');
+      L.put(v, W / 2 + 350, y, 22, sel ? TEAM[0].css : '#d8deef', 'right', true);
+    });
+    const tip = typing ? 'Type, then Enter to keep it' : setAt >= 4 && setAt <= 5 ? 'Enter to type' : 'Left / Right to change  ·  Esc to go back';
+    L.put(tip, W / 2, H - 50, 18, '#8590b4');
+  }
+  function drawHelp(): void {
+    drawStars(simT * 20, 0);
+    L.put('How to play', W / 2, 70, 44, '#ffffff', 'center', true);
+    const lines = [
+      'Your ship drifts: it keeps moving the way it was going until you thrust another way.',
+      'Turn to face somewhere new and thrust to change course; turn around and thrust to stop.',
+      'Energy is your shield and your ammo. Shots, afterburn and mines spend it; it refills when you ease off.',
+      'A ship at zero energy is destroyed and relaunches from its gate a few seconds later.',
+      'Three beacons drift through the zone. Sit inside a ring with more ships than the other fleet to take it.',
+      'Every second a beacon is held, its fleet scores. Kills score too. First fleet to the target wins the round.',
+      'While you wait to relaunch, pick a hull (1 2 3) and a weapon (Z X C) to answer what is out there.',
+      'The edges wrap: fly off one side and you come back on the other.',
+    ];
+    lines.forEach((l, i) => L.put(l, W / 2, 140 + i * 36, 18, '#d8deef'));
+    CONTROLS.forEach((c, i) => L.put(c, W / 2, 460 + i * 32, 17, '#aab4d4'));
+    L.put('Gamepad: stick turns, A thrusts, X fires, LB afterburns, B drops a mine; respawning, X and Y pick the loadout', W / 2, 600, 16, '#8590b4');
+    L.put('Enter to go back', W / 2, H - 50, 20, TEAM[0].css, 'center', true);
+  }
+  function drawNet(): void {
+    drawStars(simT * 20, 0);
+    L.put('Online zone', W / 2, 200, 44, '#ffffff', 'center', true);
+    if (!net || net.status === 'closed') {
+      L.put(net?.reason || 'Not connected.', W / 2, 300, 22, '#ff8a96');
+      L.put('Start a zone with "npm run server", or set its address in Settings.', W / 2, 350, 18, '#aab4d4');
+      L.put('Enter to go back', W / 2, H - 80, 22, TEAM[0].css, 'center', true);
+    } else {
+      L.put(`Connecting to ${settings.server} as ${settings.name}...`, W / 2, 300, 22, '#d8deef');
+      L.put('Esc to cancel', W / 2, H - 80, 20, '#8590b4');
+    }
+  }
+  function drawScoreboard(): void {
+    top.rect(W / 2 - 430, 110, 860, 480).fill({ color: 0x03040b, alpha: 0.9 }).stroke({ width: 1, color: 0x2a3354 });
+    T.put('Scoreboard', W / 2, 140, 26, '#ffffff', 'center', true);
+    for (const team of [0, 1] as Team[]) {
+      const x = W / 2 - 410 + team * 430;
+      T.put(`${TEAM[team].name}  ${Math.floor(world.scores[team])}  ·  rounds ${world.roundsWon[team]}`, x, 180, 18, TEAM[team].css, 'left', true);
+      T.put('Pilot', x, 210, 14, '#8590b4', 'left'); T.put('Ship', x + 200, 210, 14, '#8590b4', 'left');
+      T.put('K', x + 300, 210, 14, '#8590b4', 'left'); T.put('D', x + 350, 210, 14, '#8590b4', 'left');
+      world.ships.filter(sh => sh.team === team).sort((a, b) => b.kills - a.kills || a.deaths - b.deaths).forEach((sh, i) => {
+        const y = 236 + i * 22, c = sh.id === ME ? '#ffffff' : sh.human ? '#e6f6ff' : '#aab4d4';
+        T.put(sh.name, x, y, 15, c, 'left', sh.id === ME); T.put(HULL_NAME[sh.hull], x + 200, y, 15, c, 'left');
+        T.put(`${sh.kills}`, x + 300, y, 15, c, 'left'); T.put(`${sh.deaths}`, x + 350, y, 15, c, 'left');
+      });
+    }
+  }
+
   function draw(): void {
     g.clear(); hud.clear(); top.clear(); L.begin(); T.begin();
     if (scene === 'title') drawTitle();
+    else if (scene === 'settings') drawSettings();
+    else if (scene === 'help') drawHelp();
+    else if (scene === 'net') drawNet();
     else if (scene === 'figures') drawFigures();
     else {
       drawZone(); drawHUD(); drawOverlays();
       if (scene === 'pause') {
         top.rect(0, 0, W, H).fill({ color: 0x03040b, alpha: 0.6 });
         T.put('Paused', W / 2, H / 2 - 20, 48, '#ffffff', 'center', true);
-        T.put('P to carry on  ·  M to mute', W / 2, H / 2 + 30, 20, '#aab4d4');
+        T.put(net ? 'P to carry on (the zone keeps going)  ·  Q to leave the zone  ·  M to mute' : 'P to carry on  ·  Q to quit to the menu  ·  M to mute', W / 2, H / 2 + 30, 20, '#aab4d4');
       }
+      if (held('Tab') && scene === 'play') drawScoreboard();
+      if (net && scene === 'play') L.put(`online  ·  ${net.ping} ms`, 20, 72, 14, '#8590b4', 'left');
     }
     L.end(); T.end();
   }
