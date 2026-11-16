@@ -162,9 +162,9 @@ This is what zubspace spent most of its effort on, and why it feels good; we
 should design ours from first principles in an ADR.
 *Where:* `src/net/protocol.ts`, `server/zone.ts`, new ADR-0003.
 
-**10. Free entry, paid nothing that matters.** *(decision for Oscar)*
+**10. Free entry, paid nothing that matters.** *(decided 2026-11-16: Oscar chose free to play)*
 A game that depends on population can't put a price wall in front of its players.
-Recommended: **free to play on Steam plus a free browser build on the same
+Chosen: **free to play on Steam plus a free browser build on the same
 servers, with a one-time Supporter Pack** (hull skins, trails, squad banners) and
 no stat advantages ever. The cost: free games attract smurfs and cheaters, which
 our authoritative server already blunts and items 2 and 9 help with. The fallback
@@ -199,11 +199,15 @@ them farm the open zone.
 
 ## 4. Suggested order
 
+The build thread ("Pick the space game concept", which owns the game code) should
+adopt items 1-5 in its current rework toward the giant map, prize pickups and
+bounty, since the map size and prize rules decide items 1 and 5.
+
 1. Items 1, 2 and 5 together (bots and density), then playtest.
 2. Items 3 and 4 (dying teaches, aim-steer), then playtest with people new to the
    genre. Their 10-minute retention is the number to watch.
 3. Item 9's ADR before any public server, then 6, 7, 8.
-4. Item 10 is Oscar's call; make it before building a store page.
+4. Item 10 is decided: free to play. Build the store page and the Supporter Pack around that.
 
 ## Sources
 
