@@ -37,5 +37,7 @@ export class Sound {
   capture(): void { this.tone(523, 0.12, 'triangle', 0.18); this.tone(784, 0.25, 'triangle', 0.18, 0, 0.11); }
   lost(): void { this.tone(330, 0.35, 'triangle', 0.15, 0.6); }
   mine(): void { this.tone(160, 0.12, 'square', 0.1, 1.5); }
+  /** Low energy: two short falling beeps, the sound backup for the red HUD bar. */
+  warn(): void { this.tone(520, 0.07, 'square', 0.07, 0.8); this.tone(390, 0.09, 'square', 0.07, 0.8, 0.1); }
   win(): void { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.16, 0, i * 0.12)); }
 }

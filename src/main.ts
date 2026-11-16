@@ -2,7 +2,7 @@
 // (pure, deterministic, server-ready); the look is in render/art.ts; what the checks drive is
 // in hook.ts. Implements design/game-brief.md.
 
-import { Application, Container, Graphics, Text, type TextStyleFontWeight } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics, RenderTexture, Sprite, Text, type TextStyleFontWeight } from 'pixi.js';
 import config from '../data/config.json';
 import { Sound } from './audio';
 import { readPad, type PadState } from './gamepad';
@@ -15,7 +15,7 @@ import { HULL_RADIUS, HULLS, WEAPONS, type GameEvent, type Ship, type ShipInput,
 import { gate, newWorld } from './game/world';
 import { clock, install, manual, params, seedFrom } from './hook';
 import {
-  arrow, blip, dashedRing, diamond, drawAsteroid, drawBeacon, drawMine, drawShip, drawShot,
+  arrow, blip, dashedRing, look, diamond, drawAsteroid, drawBeacon, drawMine, drawShip, drawShot,
   HULL_NAME, HULL_ROLE, INK, ownerColor, ownerCss, TEAM, WEAPON_NAME, WEAPON_ROLE,
 } from './render/art';
 
@@ -108,7 +108,7 @@ function react(events: GameEvent[]): void {
     log.push(e);
     switch (e.type) {
       case 'shot': { const s = world.ships[e.ship]; if (e.ship === ME || near(s.x, s.y, 700)) (e.kind === 'bolt' ? sound.shoot() : sound.heavy()); break; }
-      case 'hit': if (e.ship === ME) { view.shake = Math.min(10, view.shake + e.amount / 40); sound.hit(); } break;
+      case 'hit': if (e.ship === ME) { if (!settings.calm) view.shake = Math.min(10, view.shake + e.amount / 40); sound.hit(); } break;
       case 'burst':
         for (let i = 0; i < e.n; i++) { // sparks are only for the eye, so they use Math.random
           const a = Math.random() * Math.PI * 2, s = e.speed * (0.3 + Math.random() * 0.7);
@@ -137,6 +137,7 @@ function react(events: GameEvent[]): void {
   }
 }
 
+let wasLow = false;
 function updatePlay(dt: number): void {
   const input = myInput();
   if (input.left || input.right) view.turned = true;
@@ -153,6 +154,9 @@ function updatePlay(dt: number): void {
   }
   // first-minute hints, taught by doing
   const p = me();
+  const isLow = p.alive && p.energy < tune[`${p.hull}_energy`] * tune.low_energy_warn;
+  if (isLow && !wasLow) sound.warn();
+  wasLow = isLow;
   view.hintT += dt;
   if (view.hint === 0 && view.thrustTime > 1.2 && view.turned) { view.hint = 1; view.hintT = 0; }
   if (view.hint === 1 && (world.beacons.some(b => dist(p, b, world.size) < 450) || view.hintT > 25)) { view.hint = 2; view.hintT = 0; }
@@ -184,10 +188,10 @@ function menuKeys(): { up: boolean; down: boolean; left: boolean; right: boolean
     ok: pressed('Enter') || pressed('Space') || edge('a') || edge('start'), back: pressed('Escape') || pressed('Backspace') || edge('b'),
   };
 }
-const SETTINGS_ROWS = ['Volume', 'Camera zoom', 'Bot skill', 'Fleet size (offline)', 'Call sign (online)', 'Zone address (online)', 'Back'] as const;
+const SETTINGS_ROWS = ['Volume', 'Camera zoom', 'Bot skill', 'Fleet size (offline)', 'Call sign (online)', 'Zone address (online)', 'Reduce flashing', 'Back'] as const;
 function settingText(i: number): string {
   const s = settings;
-  return [`${Math.round(s.volume * 100)}%`, `${s.zoom.toFixed(2)}x`, SKILL_NAMES[s.skill], `${s.fleet} a side`, s.name, s.server, ''][i];
+  return [`${Math.round(s.volume * 100)}%`, `${s.zoom.toFixed(2)}x`, SKILL_NAMES[s.skill], `${s.fleet} a side`, s.name, s.server, s.calm ? 'On' : 'Off', ''][i];
 }
 function changeSetting(i: number, d: number): void {
   const s = settings, c = config;
@@ -196,6 +200,7 @@ function changeSetting(i: number, d: number): void {
   if (i === 1) s.zoom = step2(s.zoom, c.zoom);
   if (i === 2) s.skill = Math.min(2, Math.max(0, s.skill + d)) as Settings['skill'];
   if (i === 3) s.fleet = step2(s.fleet, { ...c.fleet_size, min: 2, max: 20 });
+  if (i === 6) s.calm = !s.calm;
   save(s);
 }
 function editText(field: 'name' | 'server', max: number): void {
@@ -233,7 +238,8 @@ const scenes: Record<string, { update(dt: number): void }> = {
       if (k.down) setAt = (setAt + 1) % SETTINGS_ROWS.length;
       if (k.left) changeSetting(setAt, -1);
       if (k.right) changeSetting(setAt, 1);
-      if (k.ok && setAt === 4) editText('name', 16);
+      if (k.ok && setAt === 6) changeSetting(6, 1);
+      else if (k.ok && setAt === 4) editText('name', 16);
       else if (k.ok && setAt === 5) editText('server', 80);
       else if (k.back || (k.ok && setAt === SETTINGS_ROWS.length - 1)) scene = 'title';
     },
@@ -307,7 +313,13 @@ async function start(): Promise<void> {
   const app = new Application();
   await app.init({ canvas, width: W, height: H, background: '#03040b', resolution: Math.min(2, devicePixelRatio || 1), autoDensity: false, antialias: true, autoStart: false });
   const g = new Graphics(), hud = new Graphics(), top = new Graphics(), textLayer = new Container(), topText = new Container();
-  app.stage.addChild(g, hud, textLayer, top, topText);
+  // One bloom pass (art bible §8): the zone is drawn once into a texture, shown sharp, and shown
+  // again blurred at half resolution and added on top, so every lit line glows at one cost.
+  const lit = RenderTexture.create({ width: W, height: H, resolution: app.renderer.resolution, antialias: true });
+  const sharp = new Sprite(lit), bloom = new Sprite(lit);
+  bloom.filters = [new BlurFilter({ strength: 10, quality: 3, resolution: 0.5 })];
+  bloom.blendMode = 'add';
+  app.stage.addChild(sharp, bloom, hud, textLayer, top, topText);
   const L = new Labels(textLayer), T = new Labels(topText);
 
   const z = (): number => tune.zoom;
@@ -342,7 +354,7 @@ async function start(): Promise<void> {
     }
     for (const b of world.beacons) {
       const [X, Y] = toScreen(b.x, b.y);
-      if (!on(X, Y, 250)) continue;
+      if (!on(X, Y, tune.beacon_radius * s * 2.3)) continue;
       drawBeacon(g, b, X, Y, tune.beacon_radius * s, s, t);
       L.put(b.label, X, Y - tune.beacon_radius * s - 16, 18, ownerCss(b.owner), 'center', true);
     }
@@ -361,8 +373,8 @@ async function start(): Promise<void> {
       const [X, Y] = toScreen(sh.x, sh.y);
       if (!on(X, Y, 60)) continue;
       const r = HULL_RADIUS[sh.hull] * s * 1.25;
-      drawShip(g, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0 });
       const maxE = tune[`${sh.hull}_energy`];
+      drawShip(g, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0, low: sh.energy < maxE * tune.low_energy_warn });
       if (sh.id !== ME && sh.energy < maxE * 0.98) {
         const w = 34 * s;
         g.rect(X - w / 2, Y + r * 1.6, w, 3).fill({ color: 0xffffff, alpha: 0.15 });
@@ -407,12 +419,25 @@ async function start(): Promise<void> {
       L.put(f.a, x - wb - wm, y, 15, TEAM[f.at].css, 'right', true, al);
     });
     const ew = 360, ex = W / 2 - ew / 2, ey = H - 40; // energy: your shield and your ammo
-    const maxE = tune[`${p.hull}_energy`], ef = p.alive ? Math.max(0, p.energy / maxE) : 0, low = ef < 0.3;
+    const maxE = tune[`${p.hull}_energy`], ef = p.alive ? Math.max(0, p.energy / maxE) : 0, low = p.alive && ef < tune.low_energy_warn;
     hud.rect(ex, ey, ew, 14).fill({ color: 0xffffff, alpha: 0.08 });
-    hud.rect(ex, ey, ew * ef, 14).fill(low ? 0xff5a6a : TEAM[p.team].main);
+    if (low) { // low energy is never colour alone: a hatched fill, a threshold tick and a warning glyph
+      hud.rect(ex, ey, ew * ef, 14).fill({ color: 0xff5a6a, alpha: 0.35 });
+      for (let hx = ex - 14; hx < ex + ew * ef; hx += 7) {
+        const x0 = Math.max(ex, hx), x1 = Math.min(ex + ew * ef, hx + 14);
+        if (x1 > x0) hud.moveTo(x0, ey + 14 - (x0 - hx)).lineTo(x1, ey + 14 - (x1 - hx));
+      }
+      hud.stroke({ width: 2, color: 0xff5a6a });
+      const gx = ex + ew + 14, gy = ey - 4; // warning glyph: a triangle with a bar and a dot
+      hud.poly([gx, gy + 20, gx + 11, gy, gx + 22, gy + 20], true).stroke({ width: 2, color: 0xff5a6a, join: 'miter' });
+      hud.moveTo(gx + 11, gy + 7).lineTo(gx + 11, gy + 13).stroke({ width: 2, color: 0xff5a6a });
+      hud.rect(gx + 10, gy + 15, 2, 2).fill(0xff5a6a);
+    } else hud.rect(ex, ey, ew * ef, 14).fill(TEAM[p.team].main);
+    const tx = ex + ew * tune.low_energy_warn; // the threshold tick
+    hud.moveTo(tx, ey - 4).lineTo(tx, ey + 18).stroke({ width: 2, color: low ? 0xff5a6a : 0x8590b4 });
     hud.rect(ex, ey, ew, 14).stroke({ width: 1, color: TEAM[p.team].dim });
     L.put(`Energy ${Math.max(0, Math.round(p.energy))}`, ex - 12, ey + 7, 15, low ? '#ff5a6a' : TEAM[p.team].css, 'right', true);
-    L.put(`${HULL_NAME[p.hull]} · ${WEAPON_NAME[p.weapon]}`, ex + ew + 12, ey + 7, 15, '#aab4d4', 'left');
+    L.put(`${HULL_NAME[p.hull]} · ${WEAPON_NAME[p.weapon]}`, ex + ew + (low ? 46 : 12), ey + 7, 15, '#aab4d4', 'left');
     // the minimap: the whole zone
     const size = 170, mx = W - size - 16, my = H - size - 16, k = size / world.size;
     hud.rect(mx, my, size, size).fill({ color: 0x060a18, alpha: 0.82 }).stroke({ width: 1, color: 0x2a3354 });
@@ -505,10 +530,15 @@ async function start(): Promise<void> {
     });
     drawShip(g, 'lancer', 0, 760, 150, -Math.PI / 2, HULL_RADIUS.lancer * 2.2, { you: true, t });
     L.put('You (white chevron)', 760, 216, 15, '#ffffff');
-    drawBeacon(g, { owner: 0, progress: 1, phase: 0 }, 1050, 210, tune.beacon_radius * 0.55, 0.55, t);
-    L.put('Beacon (held)', 1050, 104, 15, TEAM[0].css, 'center', true);
-    drawBeacon(g, { owner: -1, progress: 0, phase: 1 }, 1050, 480, tune.beacon_radius * 0.55, 0.55, t);
-    L.put('Beacon (neutral)', 1050, 374, 15, '#9aa4c4', 'center', true);
+    drawShip(g, 'dart', 1, 760, 320, -Math.PI / 2, HULL_RADIUS.dart * 2.2, { t, low: true });
+    L.put('Low energy (dashed)', 760, 380, 15, TEAM[1].css);
+    const bs = 0.4, bR = tune.beacon_radius * bs;
+    drawBeacon(g, { owner: 0, progress: 1, phase: 0 }, 960, 180, bR, bs, t);
+    L.put('Beacon (held)', 960, 180 - bR - 22, 15, TEAM[0].css, 'center', true);
+    drawBeacon(g, { owner: 1, progress: -0.45, phase: 2 }, 1160, 180, bR, bs, t);
+    L.put('Beacon (being taken)', 1160, 180 - bR - 22, 15, TEAM[1].css, 'center', true);
+    drawBeacon(g, { owner: -1, progress: 0, phase: 1 }, 1060, 470, bR, bs, t);
+    L.put('Beacon (neutral)', 1060, 470 - bR - 22, 15, '#9aa4c4', 'center', true);
     const shape: [number, number][] = []; let s2 = 3;
     for (let i = 0; i < 11; i++) { s2 = (s2 * 16807) % 2147483647; shape.push([(i / 11) * Math.PI * 2, 0.8 + (s2 / 2147483647) * 0.3]); }
     drawAsteroid(g, { x: 0, y: 0, r: 60, shape, cracks: [[-0.2, -0.1, 0.18], [0.25, 0.2, 0.14]], spin: 0 }, 160, 490, 1);
@@ -525,7 +555,7 @@ async function start(): Promise<void> {
     drawStars(simT * 20, 0);
     L.put('Settings', W / 2, 90, 48, '#ffffff', 'center', true);
     SETTINGS_ROWS.forEach((r, i) => {
-      const y = 190 + i * 58, sel = i === setAt;
+      const y = 170 + i * 54, sel = i === setAt;
       if (sel) hud.rect(W / 2 - 380, y - 24, 760, 48).fill({ color: TEAM[0].main, alpha: 0.12 }).stroke({ width: 1, color: TEAM[0].main });
       L.put(r, W / 2 - 350, y, 22, sel ? '#ffffff' : '#aab4d4', 'left', sel);
       const v = settingText(i) + (typing && sel ? '_' : '');
@@ -581,6 +611,7 @@ async function start(): Promise<void> {
   }
 
   function draw(): void {
+    look.calm = settings.calm; bloom.alpha = settings.calm ? 0.45 : 0.9;
     g.clear(); hud.clear(); top.clear(); L.begin(); T.begin();
     if (scene === 'title') drawTitle();
     else if (scene === 'settings') drawSettings();
@@ -598,6 +629,7 @@ async function start(): Promise<void> {
       if (net && scene === 'play') L.put(`online  ·  ${net.ping} ms`, 20, 72, 14, '#8590b4', 'left');
     }
     L.end(); T.end();
+    app.renderer.render({ container: g, target: lit, clear: true });
   }
   function fit(): void {
     const k = Math.min(innerWidth / W, innerHeight / H);
@@ -606,17 +638,15 @@ async function start(): Promise<void> {
   }
 
   // ---- Loop: PixiJS's ticker, fixed step, frame time clamped --------------------------------
-  let acc = 0, lastFrame = clock.now(), stepping = false;
+  let acc = 0, lastFrame = clock.now();
   app.ticker.add(t => {
     lastFrame = clock.now();
-    if (manual) { if (stepping) step(); }
-    else {
+    if (!manual) {
       acc += Math.min(t.deltaMS / 1000, 0.25); // a stall never fast-forwards the game
       while (acc >= STEP) { step(); acc -= STEP; }
     }
     draw();
   });
-  let tickerTime = 0;
   install({
     get scene() { return scene; },
     get state() { return world; },
@@ -624,9 +654,10 @@ async function start(): Promise<void> {
     hold(code, on2) { if (on2) down.add(code); else down.delete(code); },
     get events() { return log; },
     step(n = 1) {
-      stepping = true;
-      try { for (let i = 0; i < n; i++) { tickerTime += STEP * 1000; app.ticker.update(tickerTime); } }
-      finally { stepping = false; }
+      // the steps run back to back and the screen is drawn once at the end: the bloom pass is the
+      // slow part of a frame on a software renderer, and a check only looks at the last one
+      for (let i = 0; i < n; i++) step();
+      draw(); app.render();
     },
   });
   addEventListener('resize', fit); fit();

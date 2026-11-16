@@ -16,5 +16,10 @@ recommended default for every open question. Each one is easy to change; say whi
 | 9 | Steam wrapper: Electron recommended, not built | Same Chromium everywhere; needs his yes | `docs/architecture/adr-0002-steam-desktop-wrapper.md` (Proposed) |
 | 10 | Bot difficulty Easy/Normal/Hard scales aim wobble and reaction time | Simple, readable | `skill_easy`, `skill_hard` |
 | 11 | Name stays "Beacon Wars" as a working title | Concept name; he can rename | `index.html`, `README.md` |
+| 12 | Art bible picks: solo mode (sign-off skipped), no green, team pips (cyan triangle, amber diamond) | Colour-blind backup without changing the palette | `design/art/art-bible.md` |
+| 13 | One half-resolution bloom pass over the zone; own halos only on beacons and your ship | Art bible §8 constrained option; cheaper than a halo on every line | `src/main.ts`, `src/render/art.ts` |
+| 14 | "Reduce flashing" setting, off by default: no white hit flash, no mine blink, no screen shake, half bloom | Art bible §7 conflict pick | `src/settings.ts` |
+| 15 | Low energy below 30% (`low_energy_warn`): dashed flickering hull, hatched red bar, threshold tick, warning glyph and beep | Never colour alone (art bible §4) | `data/config.json` |
+| 16 | Beacons: 8-arc ring, team glyph core, flat team wash; arcs alternate and the wash splits while a held beacon is drained | Art bible §2–§4 beacon states | `src/render/art.ts` |
 
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.

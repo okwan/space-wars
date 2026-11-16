@@ -10,12 +10,13 @@ export interface Settings {
   fleet: number;        // ships per fleet, you included
   server: string;       // the online zone's address
   name: string;         // your call sign online
+  calm: boolean;        // Reduce flashing: caps flash brightness and bloom, no screen shake
 }
 export const SKILL_NAMES = ['Easy', 'Normal', 'Hard'] as const;
 const KEY = 'beacon-wars-settings';
 
 export function defaults(t: Tuning): Settings {
-  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot' };
+  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot', calm: false };
 }
 export function load(t: Tuning): Settings {
   const d = defaults(t);

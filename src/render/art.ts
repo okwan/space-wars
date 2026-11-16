@@ -32,13 +32,38 @@ export function pts(shape: readonly [number, number][], x: number, y: number, a:
   for (const [px, py] of shape) out.push(x + (px * c - py * sn) * s, y + (px * sn + py * c) * s);
   return out;
 }
-/** A neon line: a wide soft pass, then the bright core. `path` draws the shape again for each pass. */
-export function glow(g: Graphics, path: () => void, color: number, width: number): void {
-  path(); g.stroke({ width: width * 3.2, color, alpha: 0.28, join: 'round', cap: 'round' });
+/** Look switches the page sets: `calm` is the Reduce flashing setting (no white flashes or blinking). */
+export const look = { calm: false };
+
+/** Team glyphs, the shape backup for cyan and amber (art bible §3, §4): cyan a triangle, amber a diamond. */
+export const TEAM_GLYPH: readonly (readonly [number, number][])[] = [
+  [[1, 0], [-0.75, 0.85], [-0.75, -0.85]],
+  [[1, 0], [0, 0.8], [-1, 0], [0, -0.8]],
+];
+
+/**
+ * A neon line: the bright core, plus a wide soft halo when `halo` is set. The screen-wide bloom pass
+ * lights every line, so only beacons and your own ship ask for their own halo (art bible §8).
+ */
+export function glow(g: Graphics, path: () => void, color: number, width: number, halo = false): void {
+  if (halo) { path(); g.stroke({ width: width * 3.2, color, alpha: 0.28, join: 'round', cap: 'round' }); }
   path(); g.stroke({ width, color, join: 'round', cap: 'round' });
 }
 
-export interface ShipLook { thrust?: boolean; burn?: boolean; t?: number; you?: boolean; flash?: boolean; alpha?: number }
+/** A closed outline drawn as dashes: what a hull looks like when its energy runs low. */
+export function dashedPoly(g: Graphics, p: number[], dash: number, gap: number, color: number, width: number, alpha = 1): void {
+  for (let i = 0; i < p.length; i += 2) {
+    const x0 = p[i], y0 = p[i + 1], x1 = p[(i + 2) % p.length], y1 = p[(i + 3) % p.length];
+    const len = Math.hypot(x1 - x0, y1 - y0), ux = (x1 - x0) / (len || 1), uy = (y1 - y0) / (len || 1);
+    for (let d = 0; d < len; d += dash + gap) {
+      const e = Math.min(len, d + dash);
+      g.moveTo(x0 + ux * d, y0 + uy * d).lineTo(x0 + ux * e, y0 + uy * e);
+    }
+  }
+  g.stroke({ width, color, alpha, cap: 'round' });
+}
+
+export interface ShipLook { thrust?: boolean; burn?: boolean; t?: number; you?: boolean; flash?: boolean; alpha?: number; low?: boolean }
 
 export function drawShip(g: Graphics, hull: Hull, team: Team, x: number, y: number, a: number, s: number, o: ShipLook = {}): void {
   const col = TEAM[team].main, t = o.t ?? 0;
@@ -51,8 +76,13 @@ export function drawShip(g: Graphics, hull: Hull, team: Team, x: number, y: numb
   }
   const body = pts(SHAPES[hull], x, y, a, s);
   g.poly(body, true).fill({ color: INK, alpha: 0.85 });
-  glow(g, () => g.poly(body, true), o.flash ? 0xffffff : col, 2);
-  g.poly(pts([[0.55, 0], [0.05, 0.16], [0.05, -0.16]], x, y, a, s), true).fill(col); // cockpit stripe: the nose reads at a glance
+  const edge = o.flash && !look.calm ? 0xffffff : col;
+  if (o.low) { // low energy: the hull line breaks into dashes and flickers (a backup for the red HUD bar)
+    const on = look.calm || Math.sin(t * 28) > -0.3;
+    dashedPoly(g, body, 5, 4, edge, 2, on ? 1 : 0.35);
+  } else glow(g, () => g.poly(body, true), edge, 2, o.you);
+  g.poly(pts([[0.6, 0], [0.15, 0]], x, y, a, s), false).stroke({ width: 2, color: col, cap: 'round' }); // nose stripe: the heading reads at a glance
+  g.poly(pts(TEAM_GLYPH[team], x, y, a, s * 0.3).map((v, i) => v + (i % 2 ? -Math.sin(a) : -Math.cos(a)) * s * 0.35), true).fill(col); // team pip
   if (o.you) { // your ship wears a white chevron behind it
     g.poly(pts([[-1.6, 0.5], [-1.35, 0], [-1.6, -0.5]], x, y, a, s), false).stroke({ width: 2, color: 0xffffff });
   }
@@ -80,25 +110,61 @@ export function dashedRing(g: Graphics, x: number, y: number, R: number, color: 
   }
 }
 
+/**
+ * A beacon (art bible §3, §4): a segmented ring of 8 arcs round a core glyph, with a flat wash of
+ * team colour on the void around it. Neutral: thin grey arcs and a hollow core. Held: the owner's
+ * arcs, wash and glyph. Being taken from its owner: the arcs alternate colours and the wash splits.
+ */
 export function drawBeacon(g: Graphics, b: Pick<Beacon, 'owner' | 'progress' | 'phase'>, x: number, y: number, R: number, scale: number, t: number): void {
   const col = ownerColor(b.owner);
-  const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + b.phase);
-  dashedRing(g, x, y, R, col, b.owner < 0 ? 0.35 : 0.45, 3);
-  if (b.progress !== 0) { // the ring fills with the colour of whoever is taking it
-    const team = b.progress > 0 ? 0 : 1, a0 = -Math.PI / 2;
-    g.moveTo(x + Math.cos(a0) * R, y + Math.sin(a0) * R).arc(x, y, R, a0, a0 + Math.PI * 2 * Math.abs(b.progress))
-      .stroke({ width: 5, color: TEAM[team].main });
+  // a held beacon sits at full progress for its owner; anything less means the other fleet is draining it
+  const draining = b.owner !== -1 && Math.abs(b.progress) < 0.999;
+  const taker: -1 | Team = draining ? (1 - b.owner) as Team : b.progress > 0 ? 0 : b.progress < 0 ? 1 : -1;
+  const contested = taker !== -1 && taker !== b.owner;
+  // one slow rhythm nothing else shares: a long pulse, then a long gap
+  const pulse = Math.pow(Math.max(0, Math.sin(t * 1.1 + b.phase)), 6);
+  // the wash: the only coloured ground light in the game, a flat radial fall-off
+  const wash = (color: number, a0: number, a1: number, k: number) => {
+    for (let i = 0; i < 9; i++) {
+      const r = R * (2.2 - i * 0.2);
+      if (a1 - a0 >= Math.PI * 2) g.circle(x, y, r); else g.moveTo(x, y).arc(x, y, r, a0, a1).closePath();
+      g.fill({ color, alpha: 0.022 * k });
+    }
+  };
+  if (contested && b.owner !== -1) {
+    const seam = Math.PI / 2 + Math.sin(t * 2.3 + b.phase) * 0.35;
+    wash(col, seam, seam + Math.PI, 1);
+    wash(TEAM[taker as Team].main, seam + Math.PI, seam + Math.PI * 2, Math.abs(b.progress) + 0.3);
+  } else if (b.owner !== -1) wash(col, 0, Math.PI * 2, 1 + pulse * 0.6);
+  else if (taker !== -1) wash(TEAM[taker].main, 0, Math.PI * 2, Math.abs(b.progress));
+  // the ring: 8 arcs turning slowly
+  const spin = t * 0.15 + b.phase, seg = (Math.PI * 2) / 8;
+  for (let i = 0; i < 8; i++) {
+    const a0 = spin + i * seg, a1 = a0 + seg * 0.68;
+    const c = contested && i % 2 ? TEAM[taker as Team].main : col;
+    g.moveTo(x + Math.cos(a0) * R, y + Math.sin(a0) * R).arc(x, y, R, a0, a1)
+      .stroke({ width: b.owner === -1 && !contested ? 2 : 3.5, color: c, alpha: b.owner === -1 && !contested ? 0.45 : 0.85, cap: 'butt' });
+  }
+  if (b.progress !== 0 && Math.abs(b.progress) < 0.999) { // the capture fill, just outside the ring: who is ahead, and how far
+    const a0 = -Math.PI / 2, Rf = R + 9 * scale;
+    g.moveTo(x + Math.cos(a0) * Rf, y + Math.sin(a0) * Rf).arc(x, y, Rf, a0, a0 + Math.PI * 2 * Math.abs(b.progress))
+      .stroke({ width: 5, color: TEAM[b.progress > 0 ? 0 : 1].main });
   }
   const hex = pts(HEX, x, y, t * 0.4 + b.phase, 30 * scale);
   g.poly(hex, true).fill({ color: INK, alpha: 0.9 });
-  glow(g, () => g.poly(hex, true), col, 2);
-  g.poly(pts(DIAMOND, x, y, -t * 1.3, (14 + 5 * pulse) * scale), true).fill(col);
+  glow(g, () => g.poly(hex, true), col, 2, true);
+  if (b.owner === -1) { // neutral: a hollow core
+    g.poly(pts(DIAMOND, x, y, -t * 0.6, 13 * scale), true).stroke({ width: 2, color: col });
+  } else { // held: the owner's glyph, lit on the pulse
+    g.poly(pts(TEAM_GLYPH[b.owner], x, y, -Math.PI / 2, (13 + 5 * pulse) * scale), true).fill(col);
+  }
 }
 
 export function drawMine(g: Graphics, m: Pick<Mine, 'team'>, live: boolean, x: number, y: number, scale: number, t: number): void {
   const p = pts(STAR8, x, y, t * 1.5, 11 * scale);
   g.poly(p, true).fill({ color: INK, alpha: 0.9 });
-  glow(g, () => g.poly(p, true), live && Math.sin(t * 10) > 0 ? 0xffffff : TEAM[m.team].main, 1.6);
+  glow(g, () => g.poly(p, true), live && !look.calm && Math.sin(t * 10) > 0 ? 0xffffff : TEAM[m.team].main, 1.6);
+  if (live && look.calm) g.circle(x, y, 3 * scale).fill(TEAM[m.team].main); // armed, shown without blinking
 }
 
 export function drawShot(g: Graphics, b: Pick<Shot, 'team' | 'kind' | 'vx' | 'vy'>, x: number, y: number, scale: number): void {
