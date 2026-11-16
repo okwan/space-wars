@@ -9,6 +9,21 @@
 section's `[To be designed]` line as that section is approved. A section still
 holding its placeholder is incomplete; a later run fills only those.
 
+## Revision 3 (2026-11-16): the walled free-for-all zone
+
+Oscar found the build "nowhere close" to the classic zone shooters and picked a free-for-all. This revision overrides
+anything below that disagrees:
+
+- **Space is black**, with two parallax layers of small stars. The nebula and planets are gone: walls and ships carry the picture.
+- **Walls** are steel tiles drawn in code (`src/render/tiles.ts`, our own art): deep blue plates on a two-tile seam grid,
+  a lit rim on the top and left faces that meet open space, a shadowed bottom and right, the odd rivet. Inner wall mass is darker.
+- **The safe zone** is a faint green deck with a fine grid and a slow dashed green ring at its edge. Green now means "safe" only.
+- **Paint**: your ship is blue, every other ship orange (the fleets are gone). People's name tags are white, bots' pale orange, the top bounty gold.
+- **Ships are small**: about 2.9x the hull radius (30-45 px), so you see far. The camera is locked on you at 1:1.
+- **Fire**: bullets are white pinpoints with a short tail, haloed by level (1 ice blue, 2 yellow, 3 pink); bombs are pulsing orbs by level
+  (1 orange, 2 magenta, 3 violet); a blast flashes its splash radius as a ring.
+- **HUD**: dark steel panels (Kenney UI, tinted); energy as a big number top right; radar bottom right in the wall colour, pods violet, foes orange dots.
+
 ## Revision 2 (2026-11-16): painted sprites replace the neon vector look
 
 Oscar played revision 1 and said the art still looks bad. The vector outlines are replaced with

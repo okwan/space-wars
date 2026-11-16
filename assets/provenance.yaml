@@ -350,3 +350,5 @@
   model: "Claude Opus 5.5"
   date: 2026-11-16
   ships: false
+# 2026-11-16: the walled zone. Tile walls, the safe deck and the radar picture are drawn at run time by our own code
+# (src/render/tiles.ts); no files, no third-party art. nebula.png and space.png above are no longer used by the game.

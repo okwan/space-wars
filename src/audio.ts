@@ -79,6 +79,10 @@ export class Sound {
   lost(): void { this.tone(330, 0.35, 'triangle', 0.15, 0.6); }
   /** Salvage picked up: a bright rising chirp, unlike any combat sound. */
   pickup(): void { this.tone(740, 0.07, 'sine', 0.14, 1.4); this.tone(1180, 0.12, 'sine', 0.12, 0, 0.06); }
+  /** A ship glancing off a wall: a dull knock. */
+  bounce(): void { this.tone(140, 0.05, 'triangle', 0.07, 0.7); }
+  /** A bomb or mine bursting nearby. */
+  blast(): void { this.tone(95, 0.32, 'sawtooth', 0.15, 0.4); this.tone(55, 0.4, 'triangle', 0.15, 0.6); }
   mine(): void { this.tone(160, 0.12, 'square', 0.1, 1.5); }
   /** Low energy: two short falling beeps, the sound backup for the red HUD bar. */
   warn(): void { this.tone(520, 0.07, 'square', 0.07, 0.8); this.tone(390, 0.09, 'square', 0.07, 0.8, 0.1); }

@@ -6,62 +6,60 @@
 - 1. Teams: "teams."
 - 2. Match or zone: "pretty sure it was open like a ton of people can be in one server at at a time?"
 - 3. Flying: "the phsyics should feel ike the continuum gaem"
+- 2026-11-16: "giant map, pretty endless", pickups, bounty; then "nowhere close to what zubspace is like" / "evreything", and picked "Free-for-all, like the reference"
 
-**Pitch:** Drop into a big, always-running asteroid zone where two fleets of pilots, real or bot, fight over drifting beacons, and every ship flies with heavy, slippery drift-and-thrust. *(inferred (strong))*
+**Pitch:** Drop into one big walled zone where every pilot, real or bot, is against every other: slippery drift-and-thrust ships, fast bullets and splash bombs, salvage to grab and bounties to collect. *(Oscar's pick, 2026-11-16)*
 
-**Genre:** team zone-control space shooter: competitive multiplayer, with shooter combat *(inferred (strong))*
+**Genre:** free-for-all multiplayer space shooter in an open tile-wall zone *(Oscar's pick)*
 
-**Controls:** arrows or WASD to turn and thrust (S reverses), Space fires guns, Shift afterburns, E drops a mine; while respawning, 1-3 picks a hull and Z/X/C picks a weapon (Q/W/R clashed with W to thrust). *(guessed)*
+**Controls:** arrows or WASD to turn and thrust (S reverses), Space fires guns, F or B fires a bomb, E lays a mine, Shift afterburns, Tab scoreboard, V full map, P pause, M mute; while relaunching, 1-3 picks a hull. Gamepad: stick steers, A thrusts, X guns, RB bomb, LB afterburn, B mine. *(guessed)*
 
-**Question:** is drift-and-thrust dogfighting over moving beacons fun for ten minutes in a zone full of bots? *(guessed)*
+**Question:** is drift-and-thrust dogfighting round walls, with bounties on everyone, fun for ten minutes in a zone full of bots? *(guessed)*
 
-**Hooks:** *(guessed)*
-- The beacons drift, so the front line moves on its own and the fight keeps relocating.
-- Energy is your shield and your ammo: every shot and every boost spends what keeps you alive.
-- Swap your loadout every respawn to answer what the other fleet is flying.
+**Hooks:**
+- Nothing slows you down: you fly by momentum and use walls to bounce, corner and escape.
+- Energy is your shield and your ammo: every shot, bomb and boost spends what keeps you alive.
+- Everyone carries a bounty; a loaded pilot is worth hunting, and losing means losing your upgrades.
 
-**Intent:** needs N players: two fleets of 10, bots fill every seat but yours *(inferred (strong))*
+**Intent:** needs N players: one zone of 16 seats by default (2-40), bots fill every seat no person holds *(inferred (strong))*
 
 ## Look and references
-- Look: glowing neon vector ships on deep black space; teams in cyan and amber; beacons as slow-pulsing rings that fill with the holder's colour; grey outlined asteroids; faint parallax starfield; every shot leaves a short glow trail. Every figure drawn, no emoji, no plain circles. *(provisional)*
-- References: the old zone-based space shooters you played (the drift physics, energy as health, open zones) for feel only, nothing copied; Asteroids (wrap-around space, thrust). *(inferred (strong))*
-- View: 2D · Camera: top-down, centred on your ship with slight look-ahead along your velocity; a minimap of the whole zone. *(guessed)*
+- Look: small sprite ships on black space with two layers of parallax stars; steel tile walls with a lit rim; a green-decked safe zone in the middle; bright pinpoint bullets coloured by level, glowing bomb orbs, splash rings. Our own art and Kenney CC0. *(provisional)*
+- References: the classic online 2D space arenas (Continuum, SubSpace) and zubspace, an open-source tribute, studied for feel only. No code, art, sounds, maps, names or exact numbers copied. *(Oscar's pick)*
+- View: 2D · Camera: top-down, locked on your ship, 1:1 scale; a local radar bottom right and a full-map overlay. *(Oscar's pick: like the reference)*
 
 ## First minute
-You spawn at your fleet's gate already flying; a hint says turn and thrust. You overshoot, learn to counter-thrust, and see the nearest beacon on the minimap drifting between asteroids. Two bots from each side are already circling it. You fire, watch your energy dip and refill, and get a kill by leading the shot. You sit inside the ring, it fills cyan, and your team's score starts ticking: the hook lands as the beacon drifts on and the enemy fleet turns to follow it. *(guessed)*
+You launch in the safe zone, where nothing can shoot or be shot. A hint says turn and thrust; you overshoot and learn to counter-thrust. You slip out through a gap in the safe zone's wall into the maze, bounce off a wall, and see orange dots on the radar. A salvage pod glows nearby: you grab it, your bounty ticks up, and a bot comes for you. You trade fire, lead a shot, and collect its bounty. *(guessed)*
 
 ## Challenge
-Bots fight properly from the start but miss sometimes and react a beat late. From about minute 2 the enemy fleet moves in groups to retake beacons. Dying costs a few seconds and gives the enemy a point; a bigger zone fight later means three beacons contested at once. *(provisional)*
+Bots fight properly from the start but miss sometimes and react a beat late, and go easy on pilots with few fights. Most bots keep within a couple of screens of a real pilot, so the fight comes to you. They route round walls, run home to the safe zone when low and hunt fat bounties from further away. *(provisional)*
 
 ## Core loop
-- Pick a hull and weapon, launch from your gate.
-- Fly to a beacon, fight for it, hold the ring until it turns your colour.
-- Held beacons tick your fleet's score; the beacons drift, so the fight moves.
-- Fly over drifting salvage pods: each gives one random upgrade for this life (energy cells, recharge, engines, thrusters, gun power, bouncing shots, side guns, an extra mine) and raises your bounty.
-- Kills raise your bounty too. Whoever downs you collects your bounty as points; you lose your upgrades. A loaded pilot is a big, visible target ("Wanted" on the minimap).
-- Die, watch a 3-second replay of how it happened, swap loadout, launch again with a complete ship. The zone is one huge open map that never ends; rounds are an optional mode (`rounds: 1`).
-- Leads: competitive play leads the teams, score, fair start and bots; the shooter leads flying, aiming and weapons.
+- Pick a hull, launch from the safe zone, fly out through its gates.
+- Grab salvage pods: each gives one random upgrade for this life (cells, recharge, engine, turning, guns, bombs, bouncing bullets, multi-fire, mines) and raises your bounty.
+- Fight anyone: guns for steady damage, bombs for splash, mines behind you. Kills raise your bounty.
+- Whoever downs you collects your bounty as points; you lose every upgrade.
+- Die, watch a 3-second replay, pick a hull, launch again.
 
 ## Goal & fail state
-- Goal: in the open zone (default), climb the points table by collecting bounties, and keep your fleet's score ahead through beacons and kills. In rounds mode, your fleet reaches the target score first. *(provisional)*
-- Fail: you are downed and lose your upgrades and bounty to the pilot who got you; the other fleet out-scores yours. Your ship's energy hitting zero destroys it: respawn after a short wait. *(provisional)*
+- Goal: climb the points table by collecting bounties. *(provisional)*
+- Fail: your energy hits zero and you are destroyed; your upgrades and bounty go to whoever got you. *(provisional)*
 
 ## Features
-- [x] Drift-and-thrust flight with real momentum, wrap-around zone edges and bouncing off asteroids
-- [x] Energy as shield and ammo: guns, afterburn and mines all spend it
-- [x] 3 drifting beacons you capture by holding the ring, ticking fleet score
-- [x] Two fleets of 10: you plus 9 bots against 10 bots, bots that fly, lead shots, dodge and go for beacons
-- [x] Loadout at respawn: 3 hulls (light, medium, heavy) and 3 weapons (rapid bolts, bouncing shot, spread)
-- [x] Rounds that end on a score and restart in place; the zone never goes to a menu
-- [x] Kill feed naming who hit who, score bar, minimap, energy bar
-- [x] Open zone (2026-11-16): 9600 px endless map, salvage pods with 8 capped upgrades lost on death, bounty and points, "Wanted" marker
-- [x] Bots keep about six ships near each real pilot, are tagged BOT, and go easy (looser aim, no mines) on pilots with few fights
-- [x] 3-second death replay; gamepad aim-steer (point the stick, the nose follows) with a settings toggle
+- [x] A walled zone: 512 x 512 tiles of 16 px (8192 px), rooms with doorways, baffles and blocks, a ringed safe zone in the middle, generated from a seed (our own generator)
+- [x] Flight with no drag, a speed cap, an afterburner, and bounces off walls that cost speed
+- [x] Energy as shield and ammo; guns (levels 1-3, bullets carry your velocity), bombs (levels 1-3, splash), mines
+- [x] Safe zone: no fire in or out, nobody inside can be hurt; a short spawn shield
+- [x] Free-for-all: 16 pilots, bots in every free seat, routing round walls with A*
+- [x] Salvage upgrades lost on death, bounty and points, the top bounty marked on the radar
+- [x] Three hulls: Dart (fastest, one gun), Lancer (twin guns, bombs bounce once), Bulwark (tough, level 2 bombs)
+- [x] HUD: energy top right, this life's upgrades, local radar with sector names, full map (V), free-for-all scoreboard (Tab), message feed bottom left
+- [x] 3-second death replay; gamepad aim-steer; online zone server (ADR-0001)
 
-Inspiration note: the open, endless zone with prizes and bounties is a genre idea (classic online 2D space arenas). Every name, number, upgrade list, sprite and sound here is our own; nothing is copied from any existing game.
+Inspiration note: the walled zone, prizes and bounties are genre ideas. Every name, number, upgrade list, map, sprite and sound here is our own.
 
 ## Your systems
-- teams · in the slice
+- teams · replaced by free-for-all (Oscar's pick, 2026-11-16)
 - an open zone many players share · thin stand-in
 - Continuum-like physics · in the slice
 - swappable ship loadouts · in the slice *(guessed)*
@@ -87,7 +85,7 @@ Inspiration note: the open, endless zone with prizes and bounties is a genre ide
 4. A server that runs the zone and swaps bots for joining players (an ADR first).
 
 ---
-**Kill condition:** if flying and fighting over beacons still isn't fun after two tuning rounds. *(guessed)*
+**Kill condition:** if flying and fighting round the walls still isn't fun after two tuning rounds. *(guessed)*
 
 **Who it's for / what they feel:** players who miss the old zone-based space shooters, and action fans who want an instant drop-in fight; the rush of out-flying someone in a close dogfight. *(guessed)*
 

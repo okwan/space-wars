@@ -35,12 +35,13 @@ describe('the online zone', () => {
     expect(zone.world.ships[welcome.you].human).toBe(true);
     expect(zone.world.ships[welcome.you].name).toBe('Adascript');
     const snap = (await a.next('snap')) as Snapshot;
-    expect(snap.ships.length).toBe(tune.fleet_size * 2);
-    // a second pilot goes to the other fleet
+    expect(snap.ships.length).toBe(tune.pilots);
+    expect([welcome.mapSeed, welcome.tiles]).toEqual([zone.world.mapSeed, zone.world.tiles]);
+    // a second pilot takes another bot seat
     const b = await pilot(zone.port(), 'Bo');
     const wb = await b.next('welcome');
     if (wb.t !== 'welcome') throw new Error('no welcome');
-    expect(zone.world.ships[wb.you].team).not.toBe(zone.world.ships[welcome.you].team);
+    expect(wb.you).not.toBe(welcome.you);
     expect(zone.pilots()).toBe(2);
     b.ws.close();
     await expect.poll(() => zone!.pilots()).toBe(1);
@@ -53,7 +54,7 @@ describe('the online zone', () => {
     const a = await pilot(zone.port(), 'Ada');
     const w = await a.next('welcome');
     if (w.t !== 'welcome') throw new Error('no welcome');
-    a.ws.send(JSON.stringify({ t: 'in', seq: 5, bits: packInput({ ...NO_INPUT, thrust: true }), hull: 0, weapon: 0 }));
+    a.ws.send(JSON.stringify({ t: 'in', seq: 5, bits: packInput({ ...NO_INPUT, thrust: true }), hull: 0 }));
     await expect.poll(() => a.msgs.filter((m): m is Snapshot => m.t === 'snap').some(s => s.ack === 5)).toBe(true);
     expect(zone.world.ships[w.you].thrusting).toBe(true);
     a.ws.close();

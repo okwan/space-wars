@@ -7,7 +7,7 @@ export interface Settings {
   volume: number;       // 0..1
   zoom: number;         // camera scale
   skill: 0 | 1 | 2;     // bot skill: easy, normal, hard
-  fleet: number;        // ships per fleet, you included
+  fleet: number;        // pilots in an offline zone, you included
   server: string;       // the online zone's address
   name: string;         // your call sign online
   calm: boolean;        // Reduce flashing: caps flash brightness and bloom, no screen shake
@@ -15,10 +15,10 @@ export interface Settings {
   aimSteer: boolean;    // gamepad: the nose turns toward the stick's direction (default), or the stick turns left/right
 }
 export const SKILL_NAMES = ['Easy', 'Normal', 'Hard'] as const;
-const KEY = 'beacon-wars-settings';
+const KEY = 'beacon-wars-settings-v3'; // v3: the free-for-all maze zone (new zoom and pilot count)
 
 export function defaults(t: Tuning): Settings {
-  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.fleet_size, server: 'ws://localhost:8787', name: 'Pilot', calm: false, taught: false, aimSteer: true };
+  return { volume: t.volume, zoom: t.zoom, skill: 1, fleet: t.pilots, server: 'ws://localhost:8787', name: 'Pilot', calm: false, taught: false, aimSteer: true };
 }
 export function load(t: Tuning): Settings {
   const d = defaults(t);
@@ -29,8 +29,8 @@ export function save(s: Settings): void {
 }
 /** The tuning a zone starts with under these settings. */
 export function apply(base: Tuning, s: Settings): Tuning {
-  const t = { ...base, zoom: s.zoom, volume: s.volume, fleet_size: s.fleet };
+  const t = { ...base, zoom: s.zoom, volume: s.volume, pilots: s.fleet };
   const k = [base.skill_easy, 1, base.skill_hard][s.skill]; // aim wobble and reaction time scale by skill
-  t.bot_aim_error *= k; t.bot_aim_error_late *= k; t.bot_reaction *= k;
+  t.bot_aim_error *= k; t.bot_reaction *= k;
   return t;
 }

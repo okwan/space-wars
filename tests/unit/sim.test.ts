@@ -1,158 +1,196 @@
-// Vitest: the zone's rules in src/game/, run in Node with no browser.
+// Vitest: the zone's rules, run headless (design/game-brief.md, Core loop): the walled map, flight
+// with no drag and a speed cap, wall bounces, guns, bombs, the safe zone, and the bots.
 import { describe, expect, it } from 'vitest';
 import config from '../../data/config.json';
-import { dist, makeRng, wd, wrap } from '../../src/game/math';
-import { damage, fly, startRound, step, STEP, updateBeacons } from '../../src/game/sim';
+import { clearLine, findPath, hitsWall, inSafe, NAV, SAFE, TILE, tileAt, WALL, zoneMap } from '../../src/game/map';
+import { maxEnergy, topSpeed } from '../../src/game/salvage';
+import { damage, exposed, step, STEP } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
-import { NO_INPUT, type Tuning, type World } from '../../src/game/types';
-import { leaveSeat, newWorld, takeSeat } from '../../src/game/world';
+import { NO_INPUT, type Ship, type ShipInput, type Tuning, type World } from '../../src/game/types';
+import { newWorld } from '../../src/game/world';
 
 const tune: Tuning = tuningFrom(config);
-function zone(seed = 7, humans?: number[]): World {
-  const w = newWorld(tune, { seed, humans }); startRound(w, tune); w.events = []; return w;
+function zone(seed = 7, humans: number[] = [0]): World {
+  const w = newWorld(tune, { seed, humans }); w.events = []; return w;
 }
-const input = (o: Partial<typeof NO_INPUT>) => ({ ...NO_INPUT, ...o });
+const input = (o: Partial<ShipInput>): ShipInput => ({ ...NO_INPUT, ...o });
+/** An open spot outside the safe zone with no wall within r px (the first one in a fixed scan). */
+function openSpot(w: World, r: number, skip = 0): { x: number; y: number } {
+  const m = zoneMap(w.mapSeed, w.tiles);
+  for (let cy = 4; cy < m.navN - 4; cy += 3) for (let cx = 4; cx < m.navN - 4; cx += 3) {
+    const x = (cx + 0.5) * NAV * TILE, y = (cy + 0.5) * NAV * TILE;
+    if (!hitsWall(m, x, y, r) && !inSafe(m, x, y) && Math.hypot(x - w.size / 2, y - w.size / 2) > 900 && skip-- <= 0) return { x, y };
+  }
+  throw new Error('no open spot');
+}
+/** Puts every ship but `keep` out of play, so a test sees only the ships it sets up. */
+function alone(w: World, ...keep: Ship[]): void {
+  for (const sh of w.ships) if (!keep.includes(sh)) { sh.alive = false; sh.respawn = 1e9; }
+  w.salvage = []; w.shots = []; w.mines = [];
+}
+/** Steps the zone n times with the human seat 0 pressing `c`. */
+function run(w: World, n: number, c: ShipInput = NO_INPUT): void {
+  for (let i = 0; i < n; i++) { step(w, new Map([[0, c]]), tune, STEP); }
+}
 
-describe('wrap-around geometry', () => {
-  it('takes the short way across the edge', () => {
-    expect(wd(3900, 100, 4000)).toBe(200);
-    expect(wd(100, 3900, 4000)).toBe(-200);
-    expect(wrap(-10, 4000)).toBe(3990);
-    expect(dist({ x: 10, y: 10 }, { x: 3990, y: 3990 }, 4000)).toBeCloseTo(Math.hypot(20, 20));
+describe('the map', () => {
+  it('is the same for the same seed, walled at the border, with a safe zone in the middle', () => {
+    const a = zoneMap(42, tune.map_tiles), b = zoneMap(42, tune.map_tiles);
+    expect(a.tiles).toEqual(b.tiles);
+    expect(tileAt(a, 0, 5)).toBe(WALL);
+    expect(tileAt(a, a.n - 1, a.n - 1)).toBe(WALL);
+    expect(tileAt(a, a.centre, a.centre)).toBe(SAFE);
+    expect(zoneMap(43, tune.map_tiles).tiles).not.toEqual(a.tiles);
   });
-  it('repeats random numbers for the same seed', () => {
-    const a = makeRng(3), b = makeRng(3);
-    expect([a(), a(), a()]).toEqual([b(), b(), b()]);
-  });
-});
-
-describe('a new zone', () => {
-  it('has two full fleets, one human seat, mirrored rocks and three beacons', () => {
-    const w = zone();
-    expect(w.ships.length).toBe(tune.fleet_size * 2);
-    expect(w.ships.filter(s => s.human).map(s => s.id)).toEqual([0]);
-    expect(w.ships.filter(s => s.team === 0).length).toBe(tune.fleet_size);
-    expect(w.beacons.length).toBe(3);
-    for (let i = 0; i < w.asteroids.length; i += 2) {
-      expect(w.asteroids[i].x + w.asteroids[i + 1].x).toBeCloseTo(w.size);
-      expect(w.asteroids[i].y).toBe(w.asteroids[i + 1].y);
-    }
+  it('has mostly open floor, and a route from the safe zone to far corners', () => {
+    const m = zoneMap(7, tune.map_tiles);
+    const open = m.nav.reduce((s, v) => s + v, 0) / m.nav.length;
+    expect(open).toBeGreaterThan(0.5);
+    const c = (m.centre + 0.5) * TILE;
+    let cell = Math.floor(m.navN * 0.85); // the open nav cell nearest the far corner, on the diagonal
+    while (!m.nav[cell * m.navN + cell]) cell--;
+    const far = (cell + 0.5) * NAV * TILE;
+    const path = findPath(m, c, c, far, far, 1e6);
+    expect(path.length).toBeGreaterThan(5);
+    const end = path[path.length - 1];
+    expect(Math.hypot(end.x - far, end.y - far)).toBeLessThan(NAV * TILE * 4);
+    for (let i = 1; i < path.length; i++) expect(clearLine(m, path[i - 1].x, path[i - 1].y, path[i].x, path[i].y)).toBe(true);
   });
 });
 
 describe('flight', () => {
-  it('drifts: speed stays almost the same with no thrust', () => {
-    const w = zone(), sh = w.ships[0];
-    sh.vx = 200; sh.vy = 0; sh.x = 1000; sh.y = 1000; w.asteroids = [];
-    for (let i = 0; i < 60; i++) fly(w, sh, NO_INPUT, tune, STEP);
-    expect(Math.hypot(sh.vx, sh.vy)).toBeGreaterThan(200 * (1 - tune.drag) - 1);
+  it('has no drag: a ship coasting in open space keeps its speed', () => {
+    const w = zone(), me = w.ships[0], at = openSpot(w, 240);
+    alone(w, me);
+    Object.assign(me, at, { vx: 120, vy: 0, a: 0 });
+    run(w, 60);
+    expect(Math.hypot(me.vx, me.vy)).toBeCloseTo(120, 5);
+    expect(me.x).toBeCloseTo(at.x + 120, 0);
   });
-  it('never goes over the hull top speed for long', () => {
-    const w = zone(), sh = w.ships[0]; w.asteroids = [];
-    for (let i = 0; i < 600; i++) fly(w, sh, input({ thrust: true }), tune, STEP);
-    expect(Math.hypot(sh.vx, sh.vy)).toBeLessThanOrEqual(tune[`${sh.hull}_speed`] + 1e-6);
+  it('caps speed at the hull top speed, and the afterburner raises the cap', () => {
+    const w = zone(), me = w.ships[0];
+    alone(w, me);
+    const cap = topSpeed(me, tune);
+    // thrust from a standstill for a few seconds, re-centred each step so no wall is ever met
+    const at = openSpot(w, 300);
+    for (let i = 0; i < 240; i++) { me.x = at.x; me.y = at.y; me.energy = 1e6; run(w, 1, input({ thrust: true })); }
+    expect(Math.hypot(me.vx, me.vy)).toBeCloseTo(cap, 3);
+    for (let i = 0; i < 240; i++) { me.x = at.x; me.y = at.y; me.energy = 1e6; run(w, 1, input({ thrust: true, burn: true })); }
+    expect(Math.hypot(me.vx, me.vy)).toBeGreaterThan(cap * 1.2);
   });
-  it('afterburn is faster and drains energy', () => {
-    const w = zone(), sh = w.ships[0]; w.asteroids = [];
-    const e0 = sh.energy;
-    for (let i = 0; i < 120; i++) fly(w, sh, input({ thrust: true, burn: true }), tune, STEP);
-    expect(Math.hypot(sh.vx, sh.vy)).toBeGreaterThan(tune[`${sh.hull}_speed`]);
-    expect(sh.energy).toBeLessThan(e0);
+  it('bounces off a wall, slower than it hit', () => {
+    const w = zone(), me = w.ships[0], m = zoneMap(w.mapSeed, w.tiles);
+    alone(w, me);
+    // fly right from an open spot until a wall
+    const at = openSpot(w, 60);
+    Object.assign(me, at, { vx: 200, vy: 0, a: 0 });
+    let t = 0;
+    while (me.vx > 0 && t++ < 60 * 30) run(w, 1);
+    expect(me.vx).toBeLessThan(0);
+    expect(-me.vx).toBeCloseTo(200 * tune.bounce, 3);
+    expect(hitsWall(m, me.x, me.y, 13)).toBe(false);
+    expect(w.events.some(e => e.type === 'bounce' && e.ship === 0)).toBe(true);
   });
-});
-
-describe('energy is shield and ammo', () => {
-  it('firing spends energy and makes shots', () => {
-    const w = zone(), sh = w.ships[0], e0 = sh.energy;
-    fly(w, sh, input({ fire: true }), tune, STEP);
-    sh.cool = 0; // past the launch cooldown
-    fly(w, sh, input({ fire: true }), tune, STEP);
-    expect(w.shots.length).toBeGreaterThan(0);
-    expect(sh.energy).toBeLessThan(e0);
-  });
-  it('a ship is destroyed at zero energy and the killer scores', () => {
-    const w = zone(), target = w.ships[tune.fleet_size], killer = w.ships[0];
-    damage(w, target, target.energy + 1, killer.id, tune);
-    expect(target.alive).toBe(false);
-    expect(killer.kills).toBe(1);
-    expect(w.scores[0]).toBe(tune.kill_points);
-    expect(w.events.some(e => e.type === 'kill')).toBe(true);
-  });
-  it('respawns with the loadout picked while waiting', () => {
-    const w = zone(), sh = w.ships[0];
-    damage(w, sh, 1e9, -1, tune);
-    for (let i = 0; i * STEP < tune.respawn_time + 0.1; i++) fly(w, sh, input({ hull: 'bulwark', weapon: 'scatter' }), tune, STEP);
-    expect(sh.alive).toBe(true);
-    expect([sh.hull, sh.weapon]).toEqual(['bulwark', 'scatter']);
-    expect(sh.energy).toBe(tune.bulwark_energy);
+  it('never leaves the map or ends up inside a wall, at any speed', () => {
+    const w = zone(3), m = zoneMap(w.mapSeed, w.tiles);
+    for (let i = 0; i < 60 * 30; i++) {
+      step(w, new Map([[0, input({ thrust: true, burn: i % 300 < 150, right: i % 97 < 20 })]]), tune, STEP);
+      for (const sh of w.ships) if (sh.alive) expect(hitsWall(m, sh.x, sh.y, 1)).toBe(false);
+    }
   });
 });
 
-describe('beacons', () => {
-  it('a lone ship inside the ring captures it, then it scores', () => {
-    const w = zone(); const b = w.beacons[1];
-    for (const s of w.ships) s.alive = false;
-    const sh = w.ships[0]; sh.alive = true; b.vx = 0; b.vy = 0; sh.x = b.x; sh.y = b.y;
-    const secs = 1 / tune.capture_rate + 0.1;
-    for (let i = 0; i * STEP < secs; i++) updateBeacons(w, tune, STEP);
-    expect(b.owner).toBe(0);
-    expect(w.events.some(e => e.type === 'capture' && e.team === 0)).toBe(true);
-    const s0 = w.scores[0];
-    for (let i = 0; i < 60; i++) updateBeacons(w, tune, STEP);
-    expect(w.scores[0] - s0).toBeCloseTo(tune.beacon_points, 3);
+describe('weapons', () => {
+  it('bullets carry the ship\'s own velocity, and cost energy', () => {
+    const w = zone(), me = w.ships[0], at = openSpot(w, 200);
+    alone(w, me);
+    Object.assign(me, at, { vx: 0, vy: 150, a: 0, shield: 0, cool: 0 });
+    const e0 = me.energy;
+    run(w, 1, input({ fire: true }));
+    const b = w.shots.find(s => s.owner === 0 && s.kind === 'bullet')!;
+    expect(b).toBeDefined();
+    expect(b.vx).toBeCloseTo(tune.gun_speed, 3);
+    expect(b.vy).toBeCloseTo(150, 3);
+    expect(me.energy).toBeLessThan(e0);
   });
-  it('equal numbers inside hold the ring still', () => {
-    const w = zone(); const b = w.beacons[1];
-    for (const s of w.ships) s.alive = false;
-    const a = w.ships[0], e = w.ships[tune.fleet_size];
-    for (const s of [a, e]) { s.alive = true; s.x = b.x; s.y = b.y; }
-    b.vx = b.vy = 0;
-    for (let i = 0; i < 120; i++) updateBeacons(w, tune, STEP);
-    expect(b.progress).toBe(0);
+  it('a bullet hit takes energy; a ship at zero is destroyed and its killer collects the bounty', () => {
+    const w = zone(), me = w.ships[0], foe = w.ships[1], at = openSpot(w, 200);
+    alone(w, me, foe);
+    Object.assign(me, at, { vx: 0, vy: 0, a: 0, shield: 0, cool: 0 });
+    Object.assign(foe, { x: at.x + 120, y: at.y, vx: 0, vy: 0, shield: 0, energy: maxEnergy(foe, tune), human: true, bounty: 25 });
+    run(w, 20, input({ fire: true }));
+    expect(foe.energy).toBeLessThan(maxEnergy(foe, tune));
+    foe.energy = 1;
+    run(w, 30, input({ fire: true }));
+    expect(foe.alive).toBe(false);
+    expect(me.kills).toBe(1);
+    expect(me.points).toBe(25);
+  });
+  it('a bomb bursts with splash damage that falls off with distance and never hurts its owner', () => {
+    const w = zone(), me = w.ships[0], near = w.ships[1], far = w.ships[2], at = openSpot(w, 260);
+    alone(w, me, near, far);
+    const e0 = 1000; // well below every hull's full energy, so any loss shows
+    for (const s of [me, near, far]) Object.assign(s, { hull: 'lancer', vx: 0, vy: 0, shield: 0, human: true, energy: e0 });
+    Object.assign(me, at); Object.assign(near, { x: at.x + 30, y: at.y }); Object.assign(far, { x: at.x, y: at.y + 70 });
+    w.shots.push({ owner: 0, kind: 'bomb', level: 1, x: at.x + 1, y: at.y, vx: 0, vy: 0, life: STEP / 2, bounces: 0 });
+    run(w, 1);
+    expect(w.events.some(e => e.type === 'blast')).toBe(true);
+    expect(me.energy).toBeGreaterThanOrEqual(e0);
+    expect(near.energy).toBeLessThan(e0 - 100);
+    expect(far.energy).toBeLessThan(e0 - 100);
+    expect(near.energy).toBeLessThan(far.energy);
+  });
+  it('the safe zone: no firing inside it, and nothing inside it can be hurt', () => {
+    const w = zone(), me = w.ships[0], m = zoneMap(w.mapSeed, w.tiles);
+    alone(w, me);
+    Object.assign(me, { x: (m.centre + 0.5) * TILE, y: (m.centre + 0.5) * TILE, vx: 0, vy: 0, shield: 0, cool: 0, bombCool: 0 });
+    run(w, 5, input({ fire: true, bomb: true, mine: true }));
+    expect(w.shots.length + w.mines.length).toBe(0);
+    expect(exposed(w, me)).toBe(false);
+    const e0 = me.energy;
+    damage(w, me, 500, 1, tune);
+    expect(me.energy).toBe(e0);
+  });
+  it('a fresh launch is shielded until it fires', () => {
+    const w = zone(), me = w.ships[0], at = openSpot(w, 100);
+    alone(w, me);
+    Object.assign(me, at, { shield: tune.spawn_shield, vx: 0, vy: 0 });
+    const e0 = me.energy;
+    damage(w, me, 300, 1, tune);
+    expect(me.energy).toBe(e0);
+    run(w, 1, input({ fire: true }));
+    expect(me.shield).toBeLessThanOrEqual(0);
+    damage(w, me, 300, 1, tune);
+    expect(me.energy).toBeLessThan(e0);
   });
 });
 
-describe('rounds and the zone', () => {
-  it('with rounds on, a fleet at the target wins the round, and the next round starts in place', () => {
-    const rt = { ...tune, rounds: 1 }, w = zone();
-    w.scores[1] = rt.target_score;
-    step(w, new Map(), rt, STEP);
-    expect(w.winner).toBe(1);
-    expect(w.roundsWon[1]).toBe(1);
-    for (let i = 0; i * STEP < rt.round_break + 0.1; i++) step(w, new Map(), rt, STEP);
-    expect(w.round).toBe(2);
-    expect(w.scores).toEqual([0, 0]);
-  });
-  it('in the open zone (rounds off) a fleet past the target keeps playing', () => {
-    const w = zone();
-    w.scores[1] = tune.target_score * 2;
-    step(w, new Map(), tune, STEP);
-    expect(tune.rounds).toBe(0);
-    expect(w.roundOver).toBe(0);
-    expect(w.round).toBe(1);
-  });
-  it('a joining person takes a bot seat, and a bot takes it back on leaving', () => {
-    const w = zone();
-    const id = takeSeat(w, 1, 'Ada');
-    expect(id).toBeGreaterThanOrEqual(0);
-    expect(w.ships[id].human).toBe(true);
-    leaveSeat(w, id);
-    expect(w.ships[id].human).toBe(false);
-  });
+describe('the zone', () => {
   it('is deterministic: the same seed and inputs give the same zone', () => {
-    const run = () => {
-      const w = zone(11);
-      for (let i = 0; i < 60 * 40; i++) { step(w, new Map([[0, input({ thrust: i % 120 < 60, fire: true, right: i % 50 < 10 })]]), tune, STEP); w.events = []; }
-      return JSON.stringify(w);
-    };
-    expect(run()).toBe(run());
+    const go = () => { const w = zone(5); run(w, 60 * 20, input({ thrust: true, fire: true })); return JSON.stringify([w.ships.map(s => [s.x, s.y, s.energy, s.kills]), w.shots.length, w.seed]); };
+    expect(go()).toBe(go());
   });
-  it('bots in the open zone fight, collect salvage and earn bounty within three minutes', () => {
-    const w = zone(5, []);
-    let pickups = 0;
-    for (let i = 0; i < 60 * 180; i++) { step(w, new Map(), tune, STEP); pickups += w.events.filter(e => e.type === 'salvage').length; w.events = []; }
-    expect(w.ships.some(s => s.kills > 0)).toBe(true);
-    expect(pickups).toBeGreaterThan(5);
+  it('relaunches a downed pilot in the safe zone with the hull it picked', () => {
+    const w = zone(), me = w.ships[0], m = zoneMap(w.mapSeed, w.tiles);
+    const at = openSpot(w, 60);
+    Object.assign(me, at, { shield: 0 });
+    damage(w, me, 1e9, 1, tune);
+    expect(me.alive).toBe(false);
+    run(w, Math.ceil(tune.respawn_time / STEP) + 2, input({ hull: 'bulwark' }));
+    expect(me.alive).toBe(true);
+    expect(me.hull).toBe('bulwark');
+    expect(inSafe(m, me.x, me.y)).toBe(true);
+  });
+  it('bots in the zone fight, collect salvage and earn bounty within two minutes', () => {
+    const w = zone(4, []);
+    let kills = 0, pickups = 0;
+    while (w.t < 120) {
+      step(w, new Map(), tune, STEP);
+      for (const e of w.events) { if (e.type === 'kill') kills++; if (e.type === 'salvage') pickups++; }
+      w.events = [];
+    }
+    expect(kills).toBeGreaterThan(5);
+    expect(pickups).toBeGreaterThan(20);
     expect(w.ships.some(s => s.points > 0)).toBe(true);
   }, 60000);
 });

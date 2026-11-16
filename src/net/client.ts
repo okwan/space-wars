@@ -4,11 +4,10 @@
 // locally and re-played from the last input the server applied, so steering has no lag.
 
 import { fly } from '../game/sim';
-import { wrap } from '../game/math';
 import type { GameEvent, ShipInput, Tuning, World } from '../game/types';
 import { newWorld } from '../game/world';
 import { applySnapshot, packInput, PROTOCOL, type ClientMsg, type ServerMsg, type Snapshot } from './protocol';
-import { HULLS, WEAPONS } from '../game/types';
+import { HULLS } from '../game/types';
 
 export type NetStatus = 'connecting' | 'online' | 'closed';
 
@@ -41,8 +40,7 @@ export class NetSession {
     if (m.t === 'full') { this.reason = m.reason; this.status = 'closed'; this.ws.close(); return; }
     if (m.t === 'welcome') {
       this.tune = m.tune; this.you = m.you;
-      const w = newWorld(m.tune, { seed: 1, humans: [] });
-      w.asteroids = m.asteroids; w.size = m.size;
+      const w = newWorld(m.tune, { seed: 1, mapSeed: m.mapSeed, humans: [] });
       this.world = w; this.status = 'online';
       return;
     }
@@ -57,7 +55,7 @@ export class NetSession {
     // replay this pilot's inputs the server has not applied yet, on its own ship only
     this.history = this.history.filter(h => h.seq > s.ack);
     const me = w.ships[this.you];
-    if (me && me.alive) for (const h of this.history) fly(w, me, { ...h.input, fire: false, mine: false }, tune, 1 / 60);
+    if (me && me.alive) for (const h of this.history) fly(w, me, { ...h.input, fire: false, bomb: false, mine: false }, tune, 1 / 60);
   }
 
   /** Sends this step's input and moves the local copy on by dt. */
@@ -67,15 +65,14 @@ export class NetSession {
     this.seq++;
     this.history.push({ seq: this.seq, input, at: performance.now() });
     if (this.history.length > 240) this.history.shift();
-    this.send({ t: 'in', seq: this.seq, bits: packInput(input), hull: HULLS.indexOf(input.hull ?? 'lancer'), weapon: WEAPONS.indexOf(input.weapon ?? 'bolt') });
+    this.send({ t: 'in', seq: this.seq, bits: packInput(input), hull: HULLS.indexOf(input.hull ?? 'lancer') });
     const me = w.ships[this.you];
     for (const sh of w.ships) {
-      if (sh === me && sh.alive) { fly(w, sh, { ...input, fire: false, mine: false }, tune, dt); continue; }
+      if (sh === me && sh.alive) { fly(w, sh, { ...input, fire: false, bomb: false, mine: false }, tune, dt); continue; }
       if (!sh.alive) continue;
-      sh.x = wrap(sh.x + sh.vx * dt, w.size); sh.y = wrap(sh.y + sh.vy * dt, w.size);
+      sh.x += sh.vx * dt; sh.y += sh.vy * dt;
     }
-    for (const b of w.shots) { b.x = wrap(b.x + b.vx * dt, w.size); b.y = wrap(b.y + b.vy * dt, w.size); }
-    for (const b of w.beacons) { b.x = wrap(b.x + b.vx * dt, w.size); b.y = wrap(b.y + b.vy * dt, w.size); }
+    for (const b of w.shots) { b.x += b.vx * dt; b.y += b.vy * dt; }
     for (const m of w.mines) m.age += dt;
     w.t += dt;
   }

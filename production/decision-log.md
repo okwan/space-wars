@@ -41,4 +41,16 @@ recommended default for every open question. Each one is easy to change; say whi
 | 34 | The salvage pod is our own art: a white-gold pod with a violet core, so it reads as neither fleet | Art bible: no green, team colours reserved for fleets | `tools/art/hulls.mjs` |
 | 35 | Balance test now checks the open zone: fleet score share above 35% over 4 seeds of 5 minutes, with kills, pickups and bounty payouts in each | Rounds no longer happen by default | `tests/unit/balance.test.ts` |
 
+| 36 | Free-for-all: every pilot against every other; teams, beacons, rounds and asteroids removed; score is points from bounties | Oscar picked "Free-for-all, like the reference" after "nowhere close to what zubspace is like" | `src/game/` |
+| 37 | The map: 512 x 512 tiles of 16 px, our own seeded generator (structures stamped in four rotations, rooms with 7-tile doorways, baffles, blocks), a safe circle ringed by a 2-tile wall with four gates, a 2-tile border | The reference genre's tile-wall maze; the map itself is ours | `src/game/map.ts`, `map_tiles` |
+| 38 | Flight: no drag at all, speed cap by truncation, per-axis wall bounce at 0.6 of the speed; hull numbers are ours (thrust 140-195, top speed 265-345, turn 3.0-4.2 rad/s) | The reference feel, our own numbers | `data/config.json` |
+| 39 | Weapons: guns levels 1-3 (bullets inherit ship velocity), bombs levels 1-3 with splash (64 px + 22 a level, falling off 60%), mines; the hull sets barrels and base bomb level | The reference's guns-and-bombs combat | `src/game/sim.ts`, `data/config.json` |
+| 40 | Safe zone: no firing inside, shots die at its edge, nothing inside can be hurt; 2 s spawn shield that firing drops | Respawn safety without spawn camping | `src/game/sim.ts` |
+| 41 | Screen: camera locked on your ship at 1:1, small ships (about 2.9x the hull radius), steel tile walls drawn in 32-tile chunks, black with two star layers, nebula and planets removed | The reference's presentation, our own art | `src/render/tiles.ts`, `src/main.ts` |
+| 42 | HUD of our own layout: energy number and bar top right, this life's upgrades under it, 220 px local radar (2600 px of zone) with sector names A1-T20, V for the full map, Tab for one points table, feed bottom left | The reference genre's HUD idea, our own layout | `src/main.ts` |
+| 43 | Keys: Space guns, F or B bomb, E mine, Shift afterburn, V map; Ctrl avoided (Ctrl+W closes a browser tab while W thrusts) | Safe in a browser | `src/main.ts` |
+| 44 | Bots look for people from further than for each other (`bot_bot_reach` 0.6), and company bots roam round their pilot once close | Bot-vs-bot fights kept bots away from the person; the "bots near people" test failed | `src/game/bots.ts` |
+| 45 | Fixed A* reopening cells forever over float rounding (Float32 costs): long routes now complete | Found by the new route test; bots route much further per search | `src/game/map.ts` |
+| 46 | Wire protocol 4: map seed and size in the welcome, no teams or beacons | Online matches the new zone | `src/net/protocol.ts` |
+
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.

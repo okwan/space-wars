@@ -1,25 +1,25 @@
 // The page: input, sound, scenes, camera and HUD, drawn with PixiJS. The rules are in game/
-// (pure, deterministic, server-ready); the look is in render/art.ts; what the checks drive is
-// in hook.ts. Implements design/game-brief.md.
+// (pure, deterministic, server-ready); the look is in render/; what the checks drive is in
+// hook.ts. Implements design/game-brief.md: a free-for-all in one big walled zone.
 
-import { Application, BlurFilter, Container, Graphics, RenderTexture, RendererType, Sprite, Text, type TextStyleFontWeight } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics, RenderTexture, RendererType, Sprite, Text, type Texture, type TextStyleFontWeight } from 'pixi.js';
 import config from '../data/config.json';
 import { Sound } from './audio';
 import { aimTurn, readPad, type PadState } from './gamepad';
 import { NetSession } from './net/client';
 import { apply, load, save, SKILL_NAMES, type Settings } from './settings';
-import { dist, wd, wrap } from './game/math';
-import { skipBreak, startRound, step as simStep, STEP } from './game/sim';
+import { inSafe, TILE, zoneMap } from './game/map';
+import { step as simStep, STEP } from './game/sim';
 import { tuningFrom } from './game/tuning';
 import { maxEnergy } from './game/salvage';
-import { HULL_RADIUS, HULLS, UPGRADES, WEAPONS, type Upgrade, type GameEvent, type Ship, type ShipInput, type Team, type World } from './game/types';
-import { gate, newWorld } from './game/world';
+import { HULL_RADIUS, HULLS, UPGRADES, type GameEvent, type Hull, type Ship, type ShipInput, type ShotKind, type Upgrade, type World } from './game/types';
+import { newWorld } from './game/world';
 import { clock, install, manual, params, seedFrom } from './hook';
 import {
-  arrow, blip, dashedPoly, dashedRing, drawTrail, look, diamond, drawBeacon, pts, TEAM_GLYPH,
-  HULL_NAME, HULL_ROLE, INK, ownerColor, ownerCss, TEAM, WEAPON_NAME, WEAPON_ROLE,
+  blip, BOMB_COL, BULLET_COL, dashedPoly, DIM_CSS, GOLD, GOLD_CSS, HULL_NAME, HULL_ROLE, look, PAINT, SAFE_COL, SAFE_CSS, TEXT_CSS,
 } from './render/art';
-import { Backdrop, beaconSprite, boomSprite, loadArt, mineSprite, PanelPool, rockSprite, shipSprite, shotSprite, SpritePool, type ShipSpriteLook } from './render/sprites';
+import { boomSprite, loadArt, mineSprite, PanelPool, shipSprite, SpritePool, type Paint, type ShipSpriteLook } from './render/sprites';
+import { radarTexture, TileLayer } from './render/tiles';
 
 const base = tuningFrom(config);
 let settings: Settings = load(base);
@@ -30,21 +30,20 @@ const TITLE = 'Beacon Wars';
 let ME = 0; // the local player's ship id (online, the seat the server gave)
 let net: NetSession | null = null;
 const CONTROLS = [
-  'Left / Right (or A / D): turn     Up (or W): thrust     Down (or S): reverse',
-  'Space: fire     Shift: afterburn     E: drop a mine',
-  'While respawning: 1 / 2 / 3 pick a hull, Z / X / C pick a weapon',
-  'Tab: scoreboard     P: pause     M: mute',
+  'Left / Right (or A / D): turn     Up (or W): thrust     Down (or S): reverse     Shift: afterburner',
+  'Space: guns     F or B: bomb     E: lay a mine',
+  'Tab: scoreboard     V: full map     P: pause     M: mute     While relaunching: 1 / 2 / 3 pick a hull',
 ];
 
 // ---- Input: keys by position (event.code), OS key repeat ignored ------------------------
 const down = new Set<string>(), hit = new Set<string>();
 const pressed = (code: string): boolean => hit.has(code);
-addEventListener('keydown', e => { if (e.code === 'Tab') e.preventDefault(); });
 const held = (...codes: string[]): boolean => codes.some(c => down.has(c));
 const sound = new Sound(settings.volume);
 let typing: ((key: string) => void) | null = null; // a text field taking keys
 addEventListener('keydown', e => {
   sound.start();
+  if (e.code === 'Tab' || e.code === 'AltLeft' || e.code === 'AltRight') e.preventDefault();
   if (typing) { typing(e.key); e.preventDefault(); return; }
   if (!e.repeat) { down.add(e.code); hit.add(e.code); }
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
@@ -54,31 +53,36 @@ addEventListener('pointerup', () => sound.start());
 addEventListener('blur', () => down.clear());
 
 // ---- The session: the zone plus what only this screen needs ------------------------------
-interface Spark { x: number; y: number; vx: number; vy: number; life: number; team: Team }
-interface Fx { kind: 'boom' | 'impact'; x: number; y: number; age: number; life: number; size: number; team: Team }
-interface FeedLine { a: string; at: Team; b: string; bt: Team | -1; t: number }
-/** One frame of the death replay: where ships and shots were (ships: id, x, y, a, alive, team, hull index, thrust). */
-interface TapeFrame { ships: number[][]; shots: { x: number; y: number; vx: number; vy: number; team: Team; kind: Ship['weapon'] }[] }
+interface Spark { x: number; y: number; vx: number; vy: number; life: number; col: number }
+interface Fx { kind: 'boom' | 'blast'; x: number; y: number; age: number; life: number; size: number; col: number }
+/** A line in the message feed, bottom left: kills and your pickups. */
+interface FeedLine { parts: [string, string][]; t: number }
+/** One frame of the death replay: ships (id, x, y, a, alive, hull index, thrust) and shots. */
+interface TapeFrame { ships: number[][]; shots: { x: number; y: number; vx: number; vy: number; kind: ShotKind; level: number }[] }
 /** A word that floats up from a ship: a pickup or a bounty paid. */
 interface Pop { text: string; x: number; y: number; t: number; color: string }
-/** What each salvage upgrade is called on screen. */
-const UP_NAME: Record<Upgrade, string> = { cells: 'Energy cells', regen: 'Recharge', engine: 'Engines', turn: 'Thrusters', guns: 'Gun power', bounce: 'Bouncing shots', spread: 'Side guns', mines: 'Extra mine' };
-const UP_SHORT: Record<Upgrade, string> = { cells: 'CEL', regen: 'RCH', engine: 'ENG', turn: 'THR', guns: 'GUN', bounce: 'BNC', spread: 'SID', mines: 'MIN' };
-const GOLD = '#ffd88a';
+/** What each salvage upgrade is called on screen, and its short HUD label. */
+const UP_NAME: Record<Upgrade, string> = {
+  cells: 'Energy cells', regen: 'Recharge', engine: 'Engines', turn: 'Thrusters', guns: 'Gun level',
+  bombs: 'Bomb level', bounce: 'Bouncing bullets', multi: 'Multi-fire', mines: 'Extra mine',
+};
+const UP_SHORT: Record<Upgrade, string> = { cells: 'Cells', regen: 'Recharge', engine: 'Engine', turn: 'Turning', guns: 'Guns', bombs: 'Bombs', bounce: 'Bounce', multi: 'Multi', mines: 'Mines' };
 interface View {
   cam: { x: number; y: number }; shake: number; sparks: Spark[]; fx: Fx[]; feed: FeedLine[]; pops: Pop[];
   tape: TapeFrame[]; tapeT: number; replay: { frames: TapeFrame[]; t: number; at: { x: number; y: number }; by: number } | null;
-  banner: { text: string; t: number; team?: Team } | null;
-  hint: number; hintT: number; lowHint: number; lowTaught: boolean; thrustTime: number; turned: boolean;
-  loadout: { hull: Ship['hull']; weapon: Ship['weapon'] };
+  banner: { text: string; t: number; color?: string } | null;
+  hint: number; hintT: number; lowHint: number; lowTaught: boolean; thrustTime: number; turned: boolean; picked: boolean;
+  hull: Hull; bigMap: boolean;
 }
 let scene = '', world: World, view: View;
 const log: GameEvent[] = []; // window.game.events
 function newView(): void {
   const me = world.ships[ME];
   view = {
-    cam: { x: me.x, y: me.y }, shake: 0, sparks: [], fx: [], feed: [], pops: [], tape: [], tapeT: 0, replay: null, banner: { text: tune.rounds ? 'Round 1: take the beacons' : 'Grab salvage, take beacons, collect bounties', t: 3 },
-    hint: settings.taught ? 4 : 0, hintT: 0, lowHint: 0, lowTaught: false, thrustTime: 0, turned: false, loadout: { hull: me.hull, weapon: me.weapon },
+    cam: { x: me.x, y: me.y }, shake: 0, sparks: [], fx: [], feed: [], pops: [], tape: [], tapeT: 0, replay: null,
+    banner: { text: 'Free-for-all: everyone is a target', t: 3 },
+    hint: settings.taught ? 4 : 0, hintT: 0, lowHint: 0, lowTaught: false, thrustTime: 0, turned: false, picked: false,
+    hull: me.nextHull, bigMap: false,
   };
 }
 /** A new offline zone: you and bots. */
@@ -86,86 +90,89 @@ function reset(): void {
   net?.close(); net = null; ME = 0;
   tune = apply(base, settings);
   world = newWorld(tune, { seed: seedFrom(config.seed), humans: [ME] });
-  startRound(world, tune);
   world.events = [];
   newView();
 }
 const me = (): Ship => world.ships[ME];
+const map = () => zoneMap(world.mapSeed, world.tiles);
 /** The live ship with the biggest bounty (at least four times the starting bounty), or -1. */
 function mostWanted(): number {
   let best = -1, top = tune.bounty_start * 4 - 1;
   for (const sh of world.ships) if (sh.alive && sh.bounty > top) { top = sh.bounty; best = sh.id; }
   return best;
 }
+/** Free-for-all paint: your ship is blue, every other ship orange. */
+const paintOf = (id: number): Paint => (id === ME ? 0 : 1);
+const nameOf = (id: number): string => (id === ME ? 'You' : world.ships[id]?.name ?? '?');
 
 let padWas: PadState | null = null;
 function myInput(): ShipInput {
-  const l = view.loadout;
-  for (const [i, k] of ['Digit1', 'Digit2', 'Digit3'].entries()) if (pressed(k)) l.hull = HULLS[i];
-  for (const [i, k] of ['KeyZ', 'KeyX', 'KeyC'].entries()) if (pressed(k)) l.weapon = WEAPONS[i];
+  for (const [i, k] of ['Digit1', 'Digit2', 'Digit3'].entries()) if (pressed(k)) view.hull = HULLS[i];
   const pad = readPad(), was = padWas;
   padWas = pad;
-  if (pad) {
-    if (pad.x && !was?.x) l.hull = HULLS[(HULLS.indexOf(l.hull) + 1) % 3];
-    if (pad.y && !was?.y) l.weapon = WEAPONS[(WEAPONS.indexOf(l.weapon) + 1) % 3];
-  }
-  const p = pad && !me().alive ? null : pad; // while respawning, X and Y pick the loadout
+  if (pad && !me().alive && pad.x && !was?.x) view.hull = HULLS[(HULLS.indexOf(view.hull) + 1) % 3];
+  const p = pad && !me().alive ? null : pad; // while relaunching, X picks the hull
   let padL = !!p?.left, padR = !!p?.right;
-  if (p && settings.aimSteer && p.mag > tune.pad_aim_dead) { // aim-steer: the nose turns toward where the stick points, at the hull's normal turn rate
+  if (p && settings.aimSteer && p.mag > tune.pad_aim_dead) { // aim-steer: the nose turns toward where the stick points
     ({ left: padL, right: padR } = aimTurn(me().a, p.sx, p.sy, tune.pad_aim_slack));
   }
   return {
     left: held('ArrowLeft', 'KeyA') || padL, right: held('ArrowRight', 'KeyD') || padR,
     thrust: held('ArrowUp', 'KeyW') || !!p?.thrust, rev: held('ArrowDown', 'KeyS') || !!p?.rev,
-    fire: held('Space') || !!p?.fire, burn: held('ShiftLeft', 'ShiftRight') || !!p?.burn,
+    fire: held('Space') || !!p?.fire, bomb: held('KeyF', 'KeyB') || !!p?.bomb,
+    burn: held('ShiftLeft', 'ShiftRight') || !!p?.burn,
     mine: pressed('KeyE') || (!!p?.mine && !was?.mine),
-    hull: l.hull, weapon: l.weapon,
+    hull: view.hull,
   };
 }
 
-/** Turns the zone's events into sound, sparks, the kill feed and banners. */
+function feed(parts: [string, string][]): void {
+  view.feed.unshift({ parts, t: 7 });
+  view.feed.length = Math.min(view.feed.length, 6);
+}
+
+/** Turns the zone's events into sound, sparks, the message feed and banners. */
 function react(events: GameEvent[]): void {
-  const p = me(), near = (x: number, y: number, r: number) => Math.hypot(wd(p.x, x, world.size), wd(p.y, y, world.size)) < r;
+  const p = me(), near = (x: number, y: number, r: number) => Math.hypot(p.x - x, p.y - y) < r;
   for (const e of events) {
     log.push(e);
     switch (e.type) {
-      case 'shot': { const s = world.ships[e.ship]; if (e.ship === ME || near(s.x, s.y, 700)) (e.kind === 'bolt' ? sound.shoot() : sound.heavy()); break; }
-      case 'hit': if (e.ship === ME) { if (!settings.calm) view.shake = Math.min(10, view.shake + e.amount / 40); sound.hit(); } break;
+      case 'shot': { const s = world.ships[e.ship]; if (e.ship === ME || near(s.x, s.y, 700)) (e.kind === 'bullet' ? sound.shoot() : sound.heavy()); break; }
+      case 'hit': if (e.ship === ME) { if (!settings.calm) view.shake = Math.min(8, view.shake + e.amount / 60); sound.hit(); } break;
+      case 'bounce': if (e.ship === ME) sound.bounce(); break;
       case 'burst':
-        if (e.n >= 30) view.fx.push({ kind: 'boom', x: e.x, y: e.y, age: 0, life: 0.55, size: 90, team: e.team }); // a mine going off
-        else if (e.n <= 4) view.fx.push({ kind: 'impact', x: e.x, y: e.y, age: 0, life: 0.16, size: 30, team: e.team });
         for (let i = 0; i < e.n; i++) { // sparks are only for the eye, so they use Math.random
           const a = Math.random() * Math.PI * 2, s = e.speed * (0.3 + Math.random() * 0.7);
-          view.sparks.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.6, team: e.team });
+          view.sparks.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.25 + Math.random() * (e.n > 10 ? 0.7 : 0.25), col: PAINT[paintOf(e.owner)].main });
         }
         break;
+      case 'blast':
+        view.fx.push({ kind: 'blast', x: e.x, y: e.y, age: 0, life: 0.35, size: e.r, col: e.owner === ME ? PAINT[0].main : 0xffb070 });
+        view.fx.push({ kind: 'boom', x: e.x, y: e.y, age: 0, life: 0.5, size: e.r * 1.6, col: 0 });
+        if (near(e.x, e.y, 800)) sound.blast();
+        break;
       case 'kill': {
-        const v = world.ships[e.ship], k = e.by >= 0 ? world.ships[e.by] : undefined;
+        const v = world.ships[e.ship];
         if (e.ship === ME && view.tape.length > 4) view.replay = { frames: view.tape.slice(), t: 0, at: { x: v.x, y: v.y }, by: e.by };
-        view.fx.push({ kind: 'boom', x: v.x, y: v.y, age: 0, life: 0.7, size: 70 + HULL_RADIUS[v.hull] * 4, team: v.team });
+        view.fx.push({ kind: 'boom', x: v.x, y: v.y, age: 0, life: 0.7, size: 50 + HULL_RADIUS[v.hull] * 4, col: 0 });
         if (near(v.x, v.y, 900)) sound.boom();
         if (e.by === ME) sound.kill();
-        if (k && e.bounty > 0 && (e.by === ME || near(v.x, v.y, 900))) view.pops.push({ text: `+${e.bounty} bounty`, x: v.x, y: v.y, t: 1.6, color: GOLD });
-        view.feed.unshift(k ? { a: k.name, at: k.team, b: v.name, bt: v.team, t: 5 } : { a: v.name, at: v.team, b: 'the rocks', bt: -1, t: 5 });
-        view.feed.length = Math.min(view.feed.length, 5);
+        if (e.by >= 0 && e.bounty > 0 && (e.by === ME || near(v.x, v.y, 900))) view.pops.push({ text: `+${e.bounty}`, x: v.x, y: v.y, t: 1.6, color: GOLD_CSS });
+        const col = (id: number) => (id === ME ? PAINT[0].css : world.ships[id].human ? '#ffffff' : PAINT[1].css);
+        if (e.by >= 0) feed([[nameOf(e.by), col(e.by)], [' downed ', DIM_CSS], [nameOf(e.ship), col(e.ship)], [`  (${e.bounty})`, GOLD_CSS]]);
+        else feed([[nameOf(e.ship), col(e.ship)], [' blew up', DIM_CSS]]);
         break;
       }
       case 'mine': if (e.ship === ME) sound.mine(); break;
       case 'salvage': {
         const sh = world.ships[e.ship];
-        if (e.ship === ME) sound.pickup();
-        if (e.ship === ME || near(sh.x, sh.y, 700)) view.pops.push({ text: e.level < 0 ? 'Fully upgraded' : `${UP_NAME[e.kind]} ${e.level}`, x: sh.x, y: sh.y, t: 1.4, color: e.ship === ME ? '#ffffff' : TEAM[sh.team].css });
+        if (e.ship === ME) {
+          sound.pickup(); view.picked = true;
+          feed([[e.level < 0 ? 'Salvage: fully upgraded' : `Salvage: ${UP_NAME[e.kind]} ${e.level}`, '#c9a2ff']]);
+        }
+        if (e.ship === ME || near(sh.x, sh.y, 600)) view.pops.push({ text: e.level < 0 ? 'Full' : `${UP_SHORT[e.kind]} ${e.level}`, x: sh.x, y: sh.y, t: 1.2, color: e.ship === ME ? '#ffffff' : PAINT[1].css });
         break;
       }
-      case 'capture': {
-        const b = world.beacons[e.beacon];
-        if (e.team === me().team) { sound.capture(); view.banner = { text: `${b.label} is ours`, t: 2.2, team: me().team }; }
-        else if (e.from === me().team) { sound.lost(); view.banner = { text: `${b.label} lost`, t: 2.2, team: (1 - me().team) as Team }; }
-        break;
-      }
-      case 'group': view.banner = { text: `The ${TEAM[e.team].short.toLowerCase()} fleet is moving as one`, t: 3, team: e.team }; break;
-      case 'round': (e.winner === me().team ? sound.win() : sound.lost()); break;
-      case 'roundStart': view.banner = { text: `Round ${e.round}: go`, t: 3 }; break;
     }
   }
 }
@@ -173,42 +180,42 @@ function react(events: GameEvent[]): void {
 let wasLow = false;
 function updatePlay(dt: number): void {
   const input = myInput();
-  sound.engine(me().alive && input.thrust, input.burn);
+  sound.engine(me().alive && (input.thrust || input.rev), input.burn);
   if (input.left || input.right) view.turned = true;
   if (input.thrust && me().alive) view.thrustTime += dt;
+  if (pressed('KeyV')) view.bigMap = !view.bigMap;
   if (net) {
     net.step(input, dt);
     if (net.world) world = net.world;
     react(net.drain());
     if (net.status === 'closed') { scene = 'net'; return; }
   } else {
-    if (pressed('Enter')) skipBreak(world, tune);
     simStep(world, new Map([[ME, input]]), tune, dt);
     react(world.events); world.events = [];
   }
   // first-minute hints, taught by doing
-  const p = me();
+  const p = me(), safe = inSafe(map(), p.x, p.y);
   const isLow = p.alive && p.energy < maxEnergy(p, tune) * tune.low_energy_warn;
   if (isLow && !wasLow) { sound.warn(); if (!view.lowTaught) { view.lowTaught = true; view.lowHint = 6; } }
   view.lowHint = Math.max(0, view.lowHint - dt);
   wasLow = isLow;
   view.hintT += dt;
   if (view.hint === 0 && view.thrustTime > 1.2 && view.turned) { view.hint = 1; view.hintT = 0; }
-  if (view.hint === 1 && (world.beacons.some(b => dist(p, b, world.size) < 450) || view.hintT > 25)) { view.hint = 2; view.hintT = 0; }
-  if (view.hint === 2 && (world.beacons.some(b => b.owner === p.team && dist(p, b, world.size) < tune.beacon_radius) || view.hintT > 35)) { view.hint = 3; view.hintT = 0; }
-  if (view.hint === 3 && view.hintT > 9) { view.hint = 4; if (!settings.taught) { settings.taught = true; save(settings); } }
+  if (view.hint === 1 && ((!safe && p.alive) || view.hintT > 25)) { view.hint = 2; view.hintT = 0; }
+  if (view.hint === 2 && (view.picked || view.hintT > 35)) { view.hint = 3; view.hintT = 0; }
+  if (view.hint === 3 && view.hintT > 10) { view.hint = 4; if (!settings.taught) { settings.taught = true; save(settings); } }
   for (const f of view.feed) f.t -= dt;
   view.feed = view.feed.filter(f => f.t > 0);
   if (view.banner) { view.banner.t -= dt; if (view.banner.t <= 0) view.banner = null; }
   view.shake = Math.max(0, view.shake - dt * 30);
-  for (const s of view.sparks) { s.life -= dt; s.x = wrap(s.x + s.vx * dt, world.size); s.y = wrap(s.y + s.vy * dt, world.size); s.vx *= 0.96; s.vy *= 0.96; }
+  for (const s of view.sparks) { s.life -= dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= 0.95; s.vy *= 0.95; }
   view.sparks = view.sparks.filter(s => s.life > 0);
   // the death replay: a rolling tape of the last few seconds, played back while you wait to relaunch
   view.tapeT += dt;
   if (view.tapeT >= 1 / tune.replay_fps && p.alive) {
     view.tapeT = 0;
-    view.tape.push({ ships: world.ships.map(sh => [sh.id, sh.x, sh.y, sh.a, sh.alive ? 1 : 0, sh.team, HULLS.indexOf(sh.hull), sh.thrusting ? 1 : 0]),
-      shots: world.shots.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, team: b.team, kind: b.kind })) });
+    view.tape.push({ ships: world.ships.map(sh => [sh.id, sh.x, sh.y, sh.a, sh.alive ? 1 : 0, HULLS.indexOf(sh.hull), sh.thrusting ? 1 : 0]),
+      shots: world.shots.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, kind: b.kind, level: b.level })) });
     if (view.tape.length > tune.replay_seconds * tune.replay_fps) view.tape.shift();
   }
   if (view.replay) {
@@ -219,11 +226,8 @@ function updatePlay(dt: number): void {
   view.pops = view.pops.filter(q => q.t > 0);
   for (const f of view.fx) f.age += dt;
   view.fx = view.fx.filter(f => f.age < f.life);
-  // the camera follows you, leaning toward where you drift
-  const lx = wrap(p.x + (p.alive ? p.vx : 0) * 0.35, world.size), ly = wrap(p.y + (p.alive ? p.vy : 0) * 0.35, world.size);
-  const k = Math.min(1, dt * 4);
-  view.cam.x = wrap(view.cam.x + wd(view.cam.x, lx, world.size) * k, world.size);
-  view.cam.y = wrap(view.cam.y + wd(view.cam.y, ly, world.size) * k, world.size);
+  // the camera sits on your ship: you see as far ahead as behind
+  if (p.alive) { view.cam.x = p.x; view.cam.y = p.y; }
 }
 
 /** The title menu, the settings list and the online join flow. */
@@ -239,10 +243,10 @@ function menuKeys(): { up: boolean; down: boolean; left: boolean; right: boolean
     ok: pressed('Enter') || pressed('Space') || edge('a') || edge('start'), back: pressed('Escape') || pressed('Backspace') || edge('b'),
   };
 }
-const SETTINGS_ROWS = ['Volume', 'Camera zoom', 'Bot skill', 'Fleet size (offline)', 'Call sign (online)', 'Zone address (online)', 'Reduce flashing', 'Gamepad steering', 'Back'] as const;
+const SETTINGS_ROWS = ['Volume', 'Camera zoom', 'Bot skill', 'Pilots (offline)', 'Call sign (online)', 'Zone address (online)', 'Reduce flashing', 'Gamepad steering', 'Back'] as const;
 function settingText(i: number): string {
   const s = settings;
-  return [`${Math.round(s.volume * 100)}%`, `${s.zoom.toFixed(2)}x`, SKILL_NAMES[s.skill], `${s.fleet} a side`, s.name, s.server, s.calm ? 'On' : 'Off', s.aimSteer ? 'Aim: point the stick' : 'Turn: stick left / right', ''][i];
+  return [`${Math.round(s.volume * 100)}%`, `${s.zoom.toFixed(2)}x`, SKILL_NAMES[s.skill], `${s.fleet} pilots`, s.name, s.server, s.calm ? 'On' : 'Off', s.aimSteer ? 'Aim: point the stick' : 'Turn: stick left / right', ''][i];
 }
 function changeSetting(i: number, d: number): void {
   const s = settings, c = config;
@@ -250,7 +254,7 @@ function changeSetting(i: number, d: number): void {
   if (i === 0) { s.volume = step2(s.volume, c.volume); sound.volume = s.volume; sound.setMuted(sound.muted); }
   if (i === 1) s.zoom = step2(s.zoom, c.zoom);
   if (i === 2) s.skill = Math.min(2, Math.max(0, s.skill + d)) as Settings['skill'];
-  if (i === 3) s.fleet = step2(s.fleet, { ...c.fleet_size, min: 2, max: 20 });
+  if (i === 3) s.fleet = step2(s.fleet, c.pilots);
   if (i === 6) s.calm = !s.calm;
   if (i === 7) s.aimSteer = !s.aimSteer;
   save(s);
@@ -290,7 +294,7 @@ const scenes: Record<string, { update(dt: number): void }> = {
       if (k.down) setAt = (setAt + 1) % SETTINGS_ROWS.length;
       if (k.left) changeSetting(setAt, -1);
       if (k.right) changeSetting(setAt, 1);
-      if (k.ok && setAt === 6) changeSetting(6, 1);
+      if (k.ok && (setAt === 6 || setAt === 7)) changeSetting(setAt, 1);
       else if (k.ok && setAt === 4) editText('name', 16);
       else if (k.ok && setAt === 5) editText('server', 80);
       else if (k.back || (k.ok && setAt === SETTINGS_ROWS.length - 1)) scene = 'title';
@@ -357,356 +361,337 @@ class Labels {
   }
 }
 
-// a fixed starfield in three parallax layers (background only, so it does not touch the zone's rng)
+// a fixed starfield in two parallax layers on black (background only, so it never touches the zone's rng)
 const stars: { x: number; y: number; layer: number; b: number }[] = [];
 { let s = 7; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  for (let layer = 0; layer < 3; layer++) for (let i = 0; i < 90; i++) stars.push({ x: r() * 1600, y: r() * 1600, layer, b: 0.3 + r() * 0.7 }); }
+  for (let layer = 0; layer < 2; layer++) for (let i = 0; i < 140; i++) stars.push({ x: r() * 1600, y: r() * 1600, layer, b: 0.35 + r() * 0.65 }); }
 
 async function start(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const app = new Application();
-  await app.init({ canvas, width: W, height: H, background: '#03040b', resolution: Math.min(2, devicePixelRatio || 1), autoDensity: false, antialias: true, autoStart: false });
+  await app.init({ canvas, width: W, height: H, background: '#000000', resolution: Math.min(2, devicePixelRatio || 1), autoDensity: false, antialias: true, autoStart: false });
   const art = await loadArt();
-  // Layers, back to front: the backdrop (tiled stars, nebula, planets), ground light (washes,
-  // trails, gates), the sprites (rocks, stations, mines, ships), the lit layer (rings, shots,
-  // flames, explosions), marks over ships, then the bloom of the lit layer, then the HUD.
-  const back = new Backdrop(art, W, H);
-  const gb = new Graphics(), spriteLayer = new Container(), lit = new Container(), g = new Graphics(), fxLayer = new Container();
+  // Layers, back to front: stars, the tile walls, ground marks (trails, safe ring), the sprites
+  // (pods, mines, ships), the lit layer (fire, flames, explosions), marks over ships, the bloom of
+  // the lit layer, then the HUD (panels, radar, lines, text), then the overlays on top.
+  const gb = new Graphics(), tiles = new TileLayer(), spriteLayer = new Container(), lit = new Container(), g = new Graphics(), fxLayer = new Container();
   const go = new Graphics(), panelLayer = new Container(), hud = new Graphics(), top = new Graphics(), topPanels = new Container(), topSprites = new Container();
-  const textLayer = new Container(), topText = new Container();
+  const textLayer = new Container(), topText = new Container(), topMarks = new Graphics();
   lit.addChild(g, fxLayer);
   const S = new SpritePool(spriteLayer, art), F = new SpritePool(fxLayer, art), TS = new SpritePool(topSprites, art), P = new PanelPool(panelLayer, art), TP = new PanelPool(topPanels, art);
-  /** A HUD panel: Kenney's notched glass panel, tinted to the dark navy of the instrument frame. */
-  const panel = (pool: PanelPool, x: number, y: number, w: number, h: number, alpha = 0.9, tint = 0x26345c) => pool.put('panel', x, y, w, h, tint, alpha);
-  /** A gauge: a dark track and a glossy fill in team colour (red when low). */
-  const gauge = (x: number, y: number, w: number, h: number, f: number, kind: 'bar0' | 'bar1' | 'barLow') => {
-    P.put('barTrack', x, y, w, h, 0x3a4466, 0.9);
-    if (w * f >= 24) P.put(kind, x, y, w * f, h);
-    else if (f > 0) hud.rect(x + 2, y + 3, Math.max(2, w * f - 2), h - 6).fill(kind === 'barLow' ? 0xff5a6a : TEAM[kind === 'bar0' ? 0 : 1].main);
+  // the radar: the map picture, cropped to a square round you by a mask; and the full map overlay
+  const radarBox = new Container(), radarPic = new Sprite(), radarMask = new Graphics();
+  radarBox.addChild(radarPic); radarBox.mask = radarMask;
+  const bigPic = new Sprite();
+  let radarKey = '', radarTex: Texture | null = null;
+  const radarFor = (): Texture => {
+    const key = `${world.mapSeed}:${world.tiles}`;
+    if (key !== radarKey) { radarTex?.destroy(true); radarTex = radarTexture(map()); radarKey = key; }
+    return radarTex!;
   };
+  /** A HUD panel: Kenney's notched glass panel, tinted to a dark steel. */
+  const panel = (pool: PanelPool, x: number, y: number, w: number, h: number, alpha = 0.94, tint = 0x1c2440) => pool.put('panel', x, y, w, h, tint, alpha);
   // One bloom pass (art bible §8): only the lit layer is drawn again, at half resolution, blurred
-  // and added on top, so shots, flames and rings glow and the ships' paintwork stays crisp.
+  // and added on top, so fire, flames and blasts glow and the hulls stay crisp.
   const glowRT = RenderTexture.create({ width: W, height: H, resolution: 0.5 });
-  const bloom = new Sprite(glowRT); bloom.scale.set(1);
-  bloom.filters = [new BlurFilter({ strength: 8, quality: 3 })];
+  const bloom = new Sprite(glowRT);
+  bloom.filters = [new BlurFilter({ strength: 6, quality: 3 })];
   bloom.blendMode = 'add';
   // the Canvas 2D fallback (no WebGL) skips filters, so an unblurred copy would only double every colour
   bloom.visible = app.renderer.type !== RendererType.CANVAS;
-  app.stage.addChild(back.layer, gb, spriteLayer, lit, go, bloom, panelLayer, hud, textLayer, top, topPanels, topSprites, topText);
+  const radarBack = new Graphics();
+  app.stage.addChild(gb, tiles.layer, spriteLayer, lit, go, bloom, panelLayer, radarBack, radarBox, radarMask, hud, textLayer, top, topPanels, bigPic, topMarks, topSprites, topText);
   const L = new Labels(textLayer), T = new Labels(topText);
 
-  /** A ship sprite plus the marks drawn over it: team pip, your chevron, the low-energy ring. */
-  function ship(pool: SpritePool, fx: SpritePool, marks: Graphics, hull: Ship['hull'], team: Team, X: number, Y: number, a: number, r: number, o: ShipSpriteLook & { you?: boolean } = {}): void {
-    shipSprite(pool, fx, hull, team, X, Y, a, r, { ...o, calm: settings.calm });
-    const px = X - Math.cos(a) * r * 1.55, py = Y - Math.sin(a) * r * 1.55; // team pip behind the hull (cyan triangle, amber diamond)
-    marks.poly(pts(TEAM_GLYPH[team], px, py, a, 4.5), true).fill(TEAM[team].main).stroke({ width: 1, color: INK });
-    if (o.you) marks.poly(pts([[-2.2, 0.75], [-1.85, 0], [-2.2, -0.75]], X, Y, a, r), false).stroke({ width: 2, color: 0xffffff, alpha: 0.9 });
-    if (o.low) { // low energy: a dashed ring in team colour round the hull (a backup for the red HUD bar)
-      const ring: number[] = []; for (let i = 0; i < 20; i++) ring.push(X + Math.cos(i * Math.PI / 10) * r * 1.9, Y + Math.sin(i * Math.PI / 10) * r * 1.9);
-      dashedPoly(marks, ring, 5, 5, TEAM[team].main, 2, settings.calm || Math.sin((o.t ?? 0) * 28) > -0.3 ? 0.9 : 0.3);
+  /** A ship sprite plus the marks over it: the low-energy ring. */
+  function ship(pool: SpritePool, fx: SpritePool, marks: Graphics, hull: Hull, paint: Paint, X: number, Y: number, a: number, r: number, o: ShipSpriteLook = {}): void {
+    shipSprite(pool, fx, hull, paint, X, Y, a, r, { ...o, calm: settings.calm });
+    if (o.low) { // low energy: a dashed ring round the hull (a backup for the red HUD number)
+      const ring: number[] = []; for (let i = 0; i < 16; i++) ring.push(X + Math.cos(i * Math.PI / 8) * r * 1.8, Y + Math.sin(i * Math.PI / 8) * r * 1.8);
+      dashedPoly(marks, ring, 4, 4, 0xff5a6a, 1.5, settings.calm || Math.sin((o.t ?? 0) * 28) > -0.3 ? 0.9 : 0.3);
     }
   }
-  /** A beacon: wash on the ground layer, ring on the lit layer, the station sprite between. */
-  function beacon(b: { owner: -1 | Team; progress: number; phase: number }, X: number, Y: number, R: number, s: number, t: number): void {
-    beaconSprite(S, b.owner, X, Y, s, t, b.phase);
-    drawBeacon(g, b, X, Y, R, s, t, { under: gb, core: false });
-  }
 
-  const z = (): number => tune.zoom;
+  /** Where the camera is, and how big the world is drawn. */
+  let cam = { x: 0, y: 0, s: 1 };
   const toScreen = (x: number, y: number): [number, number] => {
     const sx = view.shake ? Math.sin(world.t * 90) * view.shake : 0;
-    return [W / 2 + wd(view.cam.x, x, world.size) * z() + sx, H / 2 + wd(view.cam.y, y, world.size) * z()];
+    return [W / 2 + (x - cam.x) * cam.s + sx, H / 2 + (y - cam.y) * cam.s];
   };
   const on = (X: number, Y: number, m: number): boolean => X > -m && X < W + m && Y > -m && Y < H + m;
 
   function drawStars(cx: number, cy: number): void {
-    back.update(cx, cy, world.size);
     for (const st of stars) {
-      const par = [0.15, 0.3, 0.5][st.layer];
+      const par = [0.2, 0.45][st.layer];
       const x = (((st.x - cx * par) % 1600) + 1600) % 1600 - 160, y = (((st.y - cy * par) % 1600) + 1600) % 1600 - 440;
       if (x < 0 || x > W || y < 0 || y > H) continue;
       const sz = st.layer + 1;
-      gb.rect(x, y, sz, sz).fill({ color: [0xaabeff, 0xc8d2ff, 0xe6e6ff][st.layer], alpha: st.b * (0.25 + st.layer * 0.2) });
+      gb.rect(x, y, sz, sz).fill({ color: st.layer ? 0xe0e4ff : 0x8a96c8, alpha: st.b * (st.layer ? 0.8 : 0.5) });
+    }
+  }
+  function drawMap(): void {
+    drawStars(cam.x, cam.y);
+    tiles.draw(map(), `${world.mapSeed}:${world.tiles}`, cam.x, cam.y, cam.s, W, H, W / 2 + (view.shake ? Math.sin(world.t * 90) * view.shake : 0), H / 2);
+  }
+
+  /** Bullets: bright pinpoints with a short tail, coloured by gun level. Bombs: glowing orbs. */
+  function shot(kind: ShotKind, level: number, x: number, y: number, vx: number, vy: number, s: number, t: number): void {
+    if (kind === 'bullet') {
+      const col = BULLET_COL[level] ?? BULLET_COL[1];
+      g.moveTo(x, y).lineTo(x - vx * 0.022 * s, y - vy * 0.022 * s).stroke({ width: 2, color: col, alpha: 0.55, cap: 'round' });
+      g.circle(x, y, 2.2 * s).fill(0xffffff);
+      F.put('glint', x, y, 0, 12 * s, { add: true, tint: col, alpha: 0.9 });
+    } else {
+      const col = BOMB_COL[level] ?? BOMB_COL[1], pulse = 0.85 + 0.15 * Math.sin(t * 30);
+      F.put('glint', x, y, t * 6, 30 * s * pulse, { add: true, tint: col });
+      g.circle(x, y, 4 * s).fill(col); g.circle(x, y, 2 * s).fill(0xffffff);
     }
   }
 
   function drawZone(): void {
-    const t = world.t, s = z();
-    drawStars(view.cam.x, view.cam.y);
-    for (const team of [0, 1] as Team[]) { // fleet gates: brackets where each fleet launches
-      const gt = gate(team, world.size), [X, Y] = toScreen(gt.x, gt.y);
-      if (!on(X, Y, 300)) continue;
-      const dir = team === 0 ? 1 : -1;
-      for (const sy of [-1, 1]) {
-        const path = () => gb.moveTo(X - dir * 60 * s, Y + sy * 150 * s).lineTo(X - dir * 110 * s, Y + sy * 150 * s).lineTo(X - dir * 110 * s, Y + sy * 40 * s);
-        path(); gb.stroke({ width: 9, color: TEAM[team].main, alpha: 0.2 }); path(); gb.stroke({ width: 3, color: TEAM[team].dim });
-      }
-      L.put(team === 0 ? 'Cyan gate' : 'Amber gate', X - dir * 85 * s, Y - 175 * s, 16, TEAM[team].css);
-    }
-    for (const b of world.beacons) {
-      const [X, Y] = toScreen(b.x, b.y);
-      if (!on(X, Y, tune.beacon_radius * s * 2.3)) continue;
-      beacon(b, X, Y, tune.beacon_radius * s, s, t);
-      L.put(b.label, X, Y - tune.beacon_radius * s - 30, 18, ownerCss(b.owner), 'center', true);
-    }
-    if (world.roundOver > 0 && world.winner !== -1) { // round won: a shockwave rolls out of each of the winner's beacons
-      const e = tune.round_break - world.roundOver, col = TEAM[world.winner].main;
-      for (const b of world.beacons) {
-        if (b.owner !== world.winner) continue;
-        const [X, Y] = toScreen(b.x, b.y);
-        for (let k = 0; k < 3; k++) {
-          const ek = e - k * 0.7; if (ek <= 0 || ek > 2.4) continue;
-          const R = tune.beacon_radius * s * (1 + ek * 3), al = 1 - ek / 2.4;
-          if (on(X, Y, R + 20)) g.circle(X, Y, R).stroke({ width: 6 * al + 1, color: col, alpha: al * 0.8 });
-        }
+    const t = world.t, s = cam.s, m = map();
+    drawMap();
+    { // the safe zone's edge: a slow dashed ring, so you can tell where shots stop
+      const [X, Y] = toScreen((m.centre + 0.5) * TILE, (m.centre + 0.5) * TILE), R = m.safeR * TILE * s;
+      if (on(X, Y, R + 20)) {
+        const ring: number[] = []; for (let i = 0; i < 48; i++) ring.push(X + Math.cos(i * Math.PI / 24 + t * 0.05) * R, Y + Math.sin(i * Math.PI / 24 + t * 0.05) * R);
+        dashedPoly(gb, ring, 8, 10, SAFE_COL, 1.5, 0.35);
       }
     }
-    world.asteroids.forEach((a, i) => { const [X, Y] = toScreen(a.x, a.y); if (on(X, Y, a.r * s * 1.3 + 10)) rockSprite(S, a, X, Y, s, i); });
     for (const v of world.salvage) { // salvage: a slowly turning pod; it blinks for its last five seconds
-      const [X, Y] = toScreen(v.x, v.y); if (!on(X, Y, 40)) continue;
+      const [X, Y] = toScreen(v.x, v.y); if (!on(X, Y, 30)) continue;
       const fading = tune.salvage_life - v.age < 5 && Math.sin(t * 14) < 0;
-      F.put('glint', X, Y, 0, 66 * s * (0.85 + 0.15 * Math.sin(t * 4 + v.id)), { add: true, tint: 0xc9a2ff, alpha: settings.calm ? 0.5 : 0.75 });
-      S.put('salvage', X, Y, t * 0.6 + v.id, 38 * s, { alpha: fading ? 0.35 : 1 });
+      F.put('glint', X, Y, 0, 40 * s * (0.85 + 0.15 * Math.sin(t * 4 + v.id)), { add: true, tint: 0xb98cff, alpha: settings.calm ? 0.5 : 0.75 });
+      S.put('salvage', X, Y, t * 0.6 + v.id, 22 * s, { alpha: fading ? 0.35 : 1 });
     }
-    for (const m of world.mines) { const [X, Y] = toScreen(m.x, m.y); if (on(X, Y, 30)) mineSprite(S, F, m.team, m.age >= tune.mine_arm, X, Y, s, t, settings.calm); }
-    for (const b of world.shots) {
-      const [X, Y] = toScreen(b.x, b.y); if (!on(X, Y, 30)) continue;
-      g.moveTo(X, Y).lineTo(X - b.vx * 0.045 * s, Y - b.vy * 0.045 * s).stroke({ width: b.kind === 'rico' ? 3 : 2, color: TEAM[b.team].main, alpha: 0.45, cap: 'round' }); // a short tail: it reads as a shot, not a star
-      shotSprite(F, b.team, b.kind, b.vx, b.vy, X, Y, s, tune[`${b.kind}_life`] - b.life < 0.07, t); }
+    for (const mn of world.mines) { const [X, Y] = toScreen(mn.x, mn.y); if (on(X, Y, 30)) mineSprite(S, F, paintOf(mn.owner), mn.age >= tune.mine_arm, X, Y, s, t, settings.calm); }
+    for (const b of world.shots) { const [X, Y] = toScreen(b.x, b.y); if (on(X, Y, 30)) shot(b.kind, b.level, X, Y, b.vx, b.vy, s, t); }
     for (const f of view.fx) {
-      const [X, Y] = toScreen(f.x, f.y); if (!on(X, Y, f.size)) continue;
-      if (f.kind === 'boom') boomSprite(F, X, Y, f.size * s * 1.4, f.age, f.life);
-      else F.put(`impact_${f.team}`, X, Y, f.age * 8, f.size * s * (1 - f.age / f.life * 0.5), { add: true, alpha: 1 - f.age / f.life });
+      const [X, Y] = toScreen(f.x, f.y); if (!on(X, Y, f.size * s * 2)) continue;
+      const k = f.age / f.life;
+      if (f.kind === 'boom') boomSprite(F, X, Y, f.size * s, f.age, f.life);
+      else { // a blast: the splash radius flashes as a ring, so you learn how far a bomb reaches
+        g.circle(X, Y, f.size * s * (0.4 + 0.6 * k)).stroke({ width: 3 * (1 - k) + 1, color: f.col, alpha: 0.8 * (1 - k) });
+        if (!settings.calm) g.circle(X, Y, f.size * s * 0.5 * (1 - k)).fill({ color: 0xffffff, alpha: 0.25 * (1 - k) });
+      }
     }
     for (const p of view.sparks) {
       const [X, Y] = toScreen(p.x, p.y); if (!on(X, Y, 10)) continue;
-      g.moveTo(X, Y).lineTo(X - p.vx * 0.05 * s, Y - p.vy * 0.05 * s).stroke({ width: 2.5, color: p.life > 0.5 ? 0xffffff : TEAM[p.team].main, alpha: Math.min(1, p.life * 1.6), cap: 'round' });
+      g.moveTo(X, Y).lineTo(X - p.vx * 0.03 * s, Y - p.vy * 0.03 * s).stroke({ width: 1.5, color: p.life > 0.3 ? 0xffffff : p.col, alpha: Math.min(1, p.life * 2), cap: 'round' });
     }
-    const p = me();
-    let tag: Ship | undefined, td = 700; // the nearest enemy gets a name tag: who it is, and that it is a bot
-    for (const sh of world.ships) if (sh.alive && sh.team !== p.team) { const d = dist(p, sh, world.size); if (d < td) { td = d; tag = sh; } }
     const wanted = mostWanted();
     for (const sh of world.ships) {
       if (!sh.alive) continue;
       const [X, Y] = toScreen(sh.x, sh.y);
       if (!on(X, Y, 60)) continue;
-      const r = HULL_RADIUS[sh.hull] * s * 1.25;
-      drawTrail(gb, sh.team, X, Y, sh.vx, sh.vy, s);
-      const maxE = maxEnergy(sh, tune);
-      ship(S, F, go, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0, low: sh.energy < maxE * tune.low_energy_warn });
-      if (sh.id !== ME && sh.energy < maxE * 0.98) {
-        const w = 34 * s;
-        go.rect(X - w / 2, Y + r * 1.9, w, 3).fill({ color: 0x000000, alpha: 0.5 });
-        go.rect(X - w / 2, Y + r * 1.9, w * Math.max(0, sh.energy / maxE), 3).fill(TEAM[sh.team].main);
-      }
-      if (sh === tag) L.put(`${sh.name} · ${HULL_NAME[sh.hull]}${sh.bounty >= tune.bounty_start * 4 ? ` · bounty ${sh.bounty}` : ''}`, X, Y - r * 1.9 - 6, 14, TEAM[sh.team].css);
-      else if (sh.id !== ME && sh.id === wanted && sh.team !== p.team) L.put(`Wanted · ${sh.bounty}`, X, Y - r * 1.9 - 6, 14, GOLD, 'center', true);
+      const r = HULL_RADIUS[sh.hull] * s, maxE = maxEnergy(sh, tune);
+      ship(S, F, go, sh.hull, paintOf(sh.id), X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, flash: sh.flash > 0, shield: sh.shield > 0, low: sh.energy < maxE * tune.low_energy_warn });
+      if (sh.id === ME) continue;
+      // the name tag under every other ship: who, and what it is worth
+      const col = sh.id === wanted ? GOLD_CSS : sh.human ? '#ffffff' : '#ffc79a';
+      L.put(`${sh.name} (${sh.bounty})`, X, Y + r * 2 + 8, 12, col, 'center', sh.id === wanted);
     }
-    for (const q of view.pops) { const [X, Y] = toScreen(q.x, q.y); if (on(X, Y, 80)) L.put(q.text, X, Y - 40, 16, q.color, 'center', true, Math.min(1, q.t * 2)); }
-    for (const b of world.beacons) { // off-screen beacons point in from the screen edge
-      const [X, Y] = toScreen(b.x, b.y);
-      if (on(X, Y, -40)) continue;
-      const a = Math.atan2(Y - H / 2, X - W / 2);
-      const k = Math.min((W / 2 - 40) / Math.abs(Math.cos(a) || 1e-6), (H / 2 - 110) / Math.abs(Math.sin(a) || 1e-6));
-      arrow(hud, W / 2 + Math.cos(a) * k, H / 2 + 20 + Math.sin(a) * k, a, 16, ownerColor(b.owner));
+    for (const q of view.pops) { const [X, Y] = toScreen(q.x, q.y); if (on(X, Y, 80)) L.put(q.text, X, Y - 30, 14, q.color, 'center', true, Math.min(1, q.t * 2)); }
+  }
+
+  /** A grid sector name for a spot (columns A to T, rows 1 to 20), to call out where things are. */
+  const sector = (x: number, y: number) => `${String.fromCharCode(65 + Math.min(19, Math.floor((x / world.size) * 20)))}${Math.min(20, Math.floor((y / world.size) * 20) + 1)}`;
+
+  function drawRadar(): void {
+    const R = 220, rx = W - R - 14, ry = H - R - 14, span = 2600, k = R / span, p = me();
+    panel(P, rx - 6, ry - 30, R + 12, R + 36, 0.9);
+    radarBack.rect(rx, ry, R, R).fill({ color: 0x000000, alpha: 0.85 });
+    radarPic.texture = radarFor(); radarPic.visible = true;
+    radarPic.scale.set(k * TILE);
+    radarPic.position.set(rx + R / 2 - cam.x * k, ry + R / 2 - cam.y * k);
+    radarMask.clear().rect(rx, ry, R, R).fill(0xffffff);
+    const inR = (x: number, y: number) => x >= rx && x <= rx + R && y >= ry && y <= ry + R;
+    const at = (x: number, y: number): [number, number] => [rx + R / 2 + (x - cam.x) * k, ry + R / 2 + (y - cam.y) * k];
+    for (const v of world.salvage) { const [X, Y] = at(v.x, v.y); if (inR(X, Y)) hud.rect(X - 1, Y - 1, 2, 2).fill(0xc9a2ff); }
+    const wanted = mostWanted();
+    for (const sh of world.ships) {
+      if (!sh.alive || sh.id === ME) continue;
+      const [X, Y] = at(sh.x, sh.y); if (!inR(X, Y)) continue;
+      hud.rect(X - 1.5, Y - 1.5, 3, 3).fill(sh.human ? 0xffffff : PAINT[1].main);
+      if (sh.id === wanted) hud.circle(X, Y, 5).stroke({ width: 1, color: GOLD });
     }
+    if (p.alive) blip(hud, rx + R / 2, ry + R / 2, p.a, 5, PAINT[0].main);
+    hud.rect(rx + R / 2 - (W / cam.s) * k / 2, ry + R / 2 - (H / cam.s) * k / 2, (W / cam.s) * k, (H / cam.s) * k).stroke({ width: 1, color: 0xffffff, alpha: 0.18 });
+    L.put(sector(p.x, p.y), rx, ry - 15, 14, TEXT_CSS, 'left', true);
+    L.put('V: full map', rx + R, ry - 15, 12, DIM_CSS, 'right');
+  }
+
+  function drawBigMap(): void {
+    const S2 = 600, mx = W / 2 - S2 / 2, my = H / 2 - S2 / 2 + 10, k = S2 / world.size, p = me();
+    panel(TP, mx - 12, my - 40, S2 + 24, S2 + 52, 0.95);
+    top.rect(mx, my, S2, S2).fill({ color: 0x000000, alpha: 0.95 });
+    bigPic.texture = radarFor(); bigPic.visible = true;
+    bigPic.scale.set(S2 / world.tiles); bigPic.position.set(mx, my);
+    const at = (x: number, y: number): [number, number] => [mx + x * k, my + y * k];
+    for (let i = 1; i < 20; i++) { // the sector grid
+      topMarks.moveTo(mx + (S2 * i) / 20, my).lineTo(mx + (S2 * i) / 20, my + S2).moveTo(mx, my + (S2 * i) / 20).lineTo(mx + S2, my + (S2 * i) / 20);
+    }
+    topMarks.stroke({ width: 1, color: 0xffffff, alpha: 0.06 });
+    for (const v of world.salvage) { const [X, Y] = at(v.x, v.y); topMarks.rect(X - 1, Y - 1, 2, 2).fill(0xc9a2ff); }
+    const wanted = mostWanted();
+    for (const sh of world.ships) {
+      if (!sh.alive || sh.id === ME) continue;
+      const [X, Y] = at(sh.x, sh.y);
+      topMarks.rect(X - 2, Y - 2, 4, 4).fill(sh.human ? 0xffffff : PAINT[1].main);
+      if (sh.id === wanted) { topMarks.circle(X, Y, 7).stroke({ width: 1.5, color: GOLD }); T.put(`${sh.name} ${sh.bounty}`, X + 9, Y, 12, GOLD_CSS, 'left', true); }
+    }
+    if (p.alive) { const [X, Y] = at(p.x, p.y); blip(topMarks, X, Y, p.a, 7, PAINT[0].main); }
+    T.put(`Zone map  ·  you are in ${sector(p.x, p.y)}`, mx, my - 20, 16, '#ffffff', 'left', true);
+    T.put('V to close', mx + S2, my - 20, 14, DIM_CSS, 'right');
   }
 
   function drawHUD(): void {
-    const p = me(), bw = 520, bx = W / 2 - bw / 2, by = 18;
-    panel(P, 8, 6, 226, 84);
-    panel(P, bx - 112, by - 10, bw + 264, 90);
-    if (view.feed.length) panel(P, W - 304, 6, 296, view.feed.length * 24 + 14);
-    const lead = Math.max(1, world.scores[0], world.scores[1]);
-    for (const t of [0, 1] as Team[]) { // rounds: both fleets racing to the target; open zone: the fleets against each other
-      const y = by + t * 22, f = Math.min(1, world.scores[t] / (tune.rounds ? tune.target_score : lead));
-      gauge(bx, y - 2, bw, 16, f, t === 0 ? 'bar0' : 'bar1');
-      L.put(`${TEAM[t].short} ${Math.floor(world.scores[t])}`, bx - 12, y + 6, 16, TEAM[t].css, 'right', true);
-    }
-    L.put(tune.rounds ? `to ${tune.target_score}  ·  round ${world.round}` : 'fleet score', bx + bw + 12, by + 17, 15, '#aab4d4', 'left');
-    world.beacons.forEach((b, i) => diamond(hud, W / 2 - 60 + i * 60, by + 62, 12, ownerColor(b.owner)));
-    const fleetLine = (t: Team) => {
-      const ships = world.ships.filter(s => s.team === t), people = ships.filter(s => s.human).length;
-      return people ? `${people} ${people === 1 ? 'pilot' : 'pilots'} + ${ships.length - people} bots` : `${ships.length} bots`;
-    };
-    L.put(`${fleetLine(p.team)}  vs  ${fleetLine((1 - p.team) as Team)}`, 20, 24, 15, '#aab4d4', 'left');
-    L.put(`Kills ${p.kills}  ·  deaths ${p.deaths}`, 20, 46, 15, '#aab4d4', 'left');
-    L.put(`Bounty ${p.alive ? p.bounty : 0}  ·  points ${p.points}`, 20, 70, 16, GOLD, 'left', true);
-    view.feed.forEach((f, i) => { // who downed who, in each pilot's fleet colour
-      const y = 26 + i * 24, x = W - 20, al = Math.min(1, f.t);
-      const mid = f.bt < 0 ? ' crashed into ' : ' downed ';
-      const wb = L.width(f.b, 15), wm = L.width(mid, 15);
-      L.put(f.b, x, y, 15, f.bt === -1 ? '#aab4d4' : TEAM[f.bt].css, 'right', false, al);
-      L.put(mid, x - wb, y, 15, '#d8deef', 'right', false, al);
-      L.put(f.a, x - wb - wm, y, 15, TEAM[f.at].css, 'right', true, al);
-    });
-    const ew = 360, ex = W / 2 - ew / 2, ey = H - 40; // energy: your shield and your ammo
+    const p = me(), m = map();
+    // top right: energy, big, with its bar; bounty and points under it
+    const ew = 230, ex = W - ew - 18, ey = 14;
     const maxE = maxEnergy(p, tune), ef = p.alive ? Math.max(0, p.energy / maxE) : 0, low = p.alive && ef < tune.low_energy_warn;
-    panel(P, ex - 150, ey - 14, ew + 340, 42);
-    if (p.alive) panel(P, ex - 150, ey - 58, ew + 340, 36, 0.85);
-    if (low) { // low energy is never colour alone: a hatched fill, a threshold tick and a warning glyph
-      gauge(ex, ey - 2, ew, 18, ef, 'barLow');
-      for (let hx = ex - 14; hx < ex + ew * ef; hx += 7) {
-        const x0 = Math.max(ex, hx), x1 = Math.min(ex + ew * ef, hx + 14);
-        if (x1 > x0) hud.moveTo(x0, ey + 14 - (x0 - hx)).lineTo(x1, ey + 14 - (x1 - hx));
-      }
-      hud.stroke({ width: 2, color: 0xff5a6a });
-      const gx = ex + ew + 14, gy = ey - 4; // warning glyph: a triangle with a bar and a dot
-      hud.poly([gx, gy + 20, gx + 11, gy, gx + 22, gy + 20], true).stroke({ width: 2, color: 0xff5a6a, join: 'miter' });
-      hud.moveTo(gx + 11, gy + 7).lineTo(gx + 11, gy + 13).stroke({ width: 2, color: 0xff5a6a });
-      hud.rect(gx + 10, gy + 15, 2, 2).fill(0xff5a6a);
-    } else gauge(ex, ey - 2, ew, 18, ef, p.team === 0 ? 'bar0' : 'bar1');
-    if (p.alive) UPGRADES.forEach((k, i) => { // upgrades this life: a short label and one pip per level
-      const lv = p.up[i] ?? 0, cap = tune[`up_${k}_max`], x0 = ex - 140 + i * 80, y0 = ey - 40;
-      L.put(UP_SHORT[k], x0, y0, 12, lv ? GOLD : '#59628a', 'left', lv > 0);
-      for (let j = 0; j < cap; j++) hud.rect(x0 + 30 + j * 8, y0 - 4, 6, 8).fill({ color: j < lv ? 0xffd88a : 0x2f3757 });
+    panel(P, ex - 12, ey - 6, ew + 24, 112);
+    L.put('ENERGY', ex, ey + 16, 13, DIM_CSS, 'left', true);
+    L.put(`${Math.max(0, Math.round(p.alive ? p.energy : 0))}`, ex + ew, ey + 16, 30, low ? '#ff5a6a' : '#cdeeff', 'right', true);
+    hud.rect(ex, ey + 38, ew, 8).fill(0x0d1224);
+    hud.rect(ex, ey + 38, ew * ef, 8).fill(low ? 0xff5a6a : PAINT[0].main);
+    const tx = ex + ew * tune.low_energy_warn; // the low-energy mark
+    hud.moveTo(tx, ey + 35).lineTo(tx, ey + 49).stroke({ width: 1.5, color: low ? 0xff5a6a : 0x6a7498 });
+    L.put(`Bounty ${p.alive ? p.bounty : 0}`, ex, ey + 64, 16, GOLD_CSS, 'left', true);
+    L.put(HULL_NAME[p.hull], ex + ew, ey + 64, 15, TEXT_CSS, 'right');
+    L.put(`Points ${p.points}   Kills ${p.kills}   Deaths ${p.deaths}`, ex, ey + 88, 13, DIM_CSS, 'left');
+    // right column: this life's salvage, one row per upgrade
+    if (p.alive) {
+      const ux = W - 168, uy = ey + 122;
+      panel(P, ux - 10, uy - 4, 160, UPGRADES.length * 19 + 12);
+      UPGRADES.forEach((k, i) => {
+        const lv = p.up[i] ?? 0, cap = tune[`up_${k}_max`], y0 = uy + 12 + i * 19;
+        L.put(UP_SHORT[k], ux, y0, 12, lv ? '#e8d8ff' : '#535c80', 'left', lv > 0);
+        for (let j = 0; j < cap; j++) hud.rect(ux + 70 + j * 13, y0 - 4, 10, 8).fill({ color: j < lv ? 0xb98cff : 0x262d48 });
+      });
+    }
+    // top left: the zone
+    const people = world.ships.filter(s => s.human).length;
+    panel(P, 8, 6, 300, 52);
+    L.put(`${TITLE}  ·  free-for-all`, 20, 22, 15, '#ffffff', 'left', true);
+    L.put(`${world.ships.length} pilots, ${people} ${people === 1 ? 'person' : 'people'}  ·  Tab: scores`, 20, 42, 13, DIM_CSS, 'left');
+    if (net) L.put(`online  ·  ${net.ping} ms`, 20, 72, 13, DIM_CSS, 'left');
+    // in the safe zone: say so, it explains why nothing fires
+    if (p.alive && inSafe(m, p.x, p.y)) L.put('SAFE ZONE  ·  no fire in or out  ·  energy refills', W / 2, 26, 15, SAFE_CSS, 'center', true);
+    else if (p.alive && p.shield > 0) L.put(`Spawn shield ${p.shield.toFixed(1)} s`, W / 2, 26, 15, SAFE_CSS, 'center', true);
+    // bottom left: the message feed, newest at the bottom
+    view.feed.slice().reverse().forEach((f, i, all) => {
+      const y = H - 24 - (all.length - 1 - i) * 20, al = Math.min(1, f.t);
+      let x = 16;
+      for (const [s, c] of f.parts) { L.put(s, x, y, 14, c, 'left', c !== DIM_CSS, al); x += L.width(s, 14, c !== DIM_CSS); }
     });
-    const tx = ex + ew * tune.low_energy_warn; // the threshold tick
-    hud.moveTo(tx, ey - 4).lineTo(tx, ey + 18).stroke({ width: 2, color: low ? 0xff5a6a : 0x8590b4 });
-    L.put(`Energy ${Math.max(0, Math.round(p.energy))}`, ex - 12, ey + 7, 15, low ? '#ff5a6a' : TEAM[p.team].css, 'right', true);
-    L.put(`${HULL_NAME[p.hull]} · ${WEAPON_NAME[p.weapon]}`, ex + ew + (low ? 46 : 12), ey + 7, 15, '#aab4d4', 'left');
-    // the minimap: the whole zone
-    const size = 170, mx = W - size - 16, my = H - size - 16, k = size / world.size;
-    panel(P, mx - 8, my - 8, size + 16, size + 16, 0.92);
-    hud.rect(mx, my, size, size).fill({ color: 0x03040b, alpha: 0.7 });
-    for (const a of world.asteroids) hud.rect(mx + a.x * k - 2, my + a.y * k - 2, 4, 4).fill(0x2f3757);
-    for (const b of world.beacons) dashedRing(hud, mx + b.x * k, my + b.y * k, tune.beacon_radius * k + 2, ownerColor(b.owner), 1, 2);
-    for (const v of world.salvage) hud.rect(mx + v.x * k - 1, my + v.y * k - 1, 2, 2).fill(0xc9a2ff);
-    const wanted = mostWanted();
-    if (wanted >= 0) { const w = world.ships[wanted]; hud.circle(mx + w.x * k, my + w.y * k, 7).stroke({ width: 1.5, color: 0xffd88a }); }
-    for (const sh of world.ships) if (sh.alive && sh.id !== ME) blip(hud, mx + sh.x * k, my + sh.y * k, sh.a, 3.2, TEAM[sh.team].main);
-    if (p.alive) blip(hud, mx + p.x * k, my + p.y * k, p.a, 5.5, 0xffffff);
-    const vw = (W / z()) * k, vh = (H / z()) * k;
-    hud.rect(mx + view.cam.x * k - vw / 2, my + view.cam.y * k - vh / 2, vw, vh).stroke({ width: 1, color: 0xffffff, alpha: 0.35 });
+    drawRadar();
     // the first-minute hint
     const hints = [
-      'Left / Right to turn, Up to thrust. You drift: turn around and thrust to slow down.',
-      'Follow the arrows to a beacon. Space fires, and every shot spends energy.',
-      'Sit inside the ring to take it. Beacons you hold score for your fleet while they drift.',
-      'Shift afterburns, E drops a mine behind you. Lead your shots: aim where they will be.',
+      'Arrows or W A S D: turn and thrust. Nothing slows you: turn around and thrust to stop.',
+      'Leave the safe zone through a gap in its wall. Space fires guns, F or B fires a bomb.',
+      'Fly over glowing salvage for upgrades. Pickups and kills raise your bounty.',
+      'Shift afterburns, E lays a mine. Tab shows scores, V the full map. The safe zone stops all fire.',
     ];
-    const hs = view.lowHint > 0 ? 'Low energy: ease off the trigger to recharge. At zero your ship is destroyed.' : hints[view.hint];
-    if (hs && !world.roundOver && p.alive) {
-      const w = L.width(hs, 17) + 36;
-      panel(P, W / 2 - w / 2, H - 156, w, 40);
-      L.put(hs, W / 2, H - 136, 17, '#e6f6ff');
+    const hs = view.lowHint > 0 ? 'Low energy: ease off the trigger, or fly back to the safe zone to recharge.' : hints[view.hint];
+    if (hs && p.alive) {
+      const w = L.width(hs, 16) + 36;
+      panel(P, W / 2 - w / 2, H - 112, w, 36);
+      L.put(hs, W / 2, H - 94, 16, '#e6f6ff');
     }
-    if (sound.muted) L.put('Muted', W - 100, H - 200, 14, '#8590b4');
+    if (sound.muted) L.put('Muted', W - 20, H - 268, 13, DIM_CSS, 'right');
   }
 
   /** The death replay: the last seconds before you went down, slowed, centred where it happened. */
   function drawReplay(r: NonNullable<View['replay']>): void {
     const f = r.frames[Math.min(r.frames.length - 1, Math.floor(r.t * tune.replay_fps * tune.replay_speed))];
-    const k = z() * 0.85, cx = r.at.x, cy = r.at.y;
-    const at = (x: number, y: number): [number, number] => [W / 2 + wd(cx, x, world.size) * k, H / 2 + wd(cy, y, world.size) * k];
-    top.rect(0, 0, W, H).fill({ color: 0x03040b, alpha: 0.97 });
-    world.asteroids.forEach((a, i) => { const [X, Y] = at(a.x, a.y); if (on(X, Y, a.r * k * 1.3)) rockSprite(TS, a, X, Y, k, i); });
-    for (const b of f.shots) { const [X, Y] = at(b.x, b.y); if (on(X, Y, 20)) shotSprite(TS, b.team, b.kind, b.vx, b.vy, X, Y, k, false, simT); }
+    for (const b of f.shots) { const [X, Y] = toScreen(b.x, b.y); if (on(X, Y, 20)) shot(b.kind, b.level, X, Y, b.vx, b.vy, cam.s, simT); }
     for (const row of f.ships) {
-      const [id, x, y, a, alive, team, hull, thr] = row;
+      const [id, x, y, a, alive, hull, thr] = row;
       if (!alive) continue;
-      const [X, Y] = at(x, y); if (!on(X, Y, 60)) continue;
-      const h = HULLS[hull], who = world.ships[id];
-      ship(TS, TS, top, h, team as Team, X, Y, a, HULL_RADIUS[h] * k * 1.25, { thrust: thr === 1, t: simT, you: id === ME });
-      if (id === r.by || id === ME) T.put(id === ME ? 'You' : who.name, X, Y - 44 * k, 15, id === ME ? '#ffffff' : TEAM[team as Team].css, 'center', true);
+      const [X, Y] = toScreen(x, y); if (!on(X, Y, 60)) continue;
+      const h = HULLS[hull], r2 = HULL_RADIUS[h] * cam.s;
+      ship(S, F, go, h, paintOf(id), X, Y, a, r2, { thrust: thr === 1, t: simT });
+      if (id === r.by || id === ME) L.put(nameOf(id), X, Y + r2 * 2 + 10, 13, id === ME ? PAINT[0].css : PAINT[1].css, 'center', true);
     }
     const by = r.by >= 0 ? world.ships[r.by] : undefined;
-    T.put('Replay', W / 2, 60, 30, '#ffffff', 'center', true);
-    T.put(by ? `${by.name} downed you (${HULL_NAME[by.hull]}, ${WEAPON_NAME[by.weapon]})` : 'The rocks got you', W / 2, 96, 18, '#d8deef');
-    T.put(`Next launch: ${HULL_NAME[view.loadout.hull]} with ${WEAPON_NAME[view.loadout.weapon]}  ·  1 2 3 / Z X C to change  ·  Enter for the full loadout`, W / 2, H - 40, 16, '#aab4d4');
+    top.rect(0, 0, W, 120).fill({ color: 0x000000, alpha: 0.6 });
+    top.rect(0, H - 90, W, 90).fill({ color: 0x000000, alpha: 0.6 });
+    T.put('Replay', W / 2, 44, 28, '#ffffff', 'center', true);
+    T.put(by ? `${by.name} downed you (${HULL_NAME[by.hull]})` : 'You blew up', W / 2, 82, 18, TEXT_CSS);
+    T.put(`Next launch: ${HULL_NAME[view.hull]}  ·  1 2 3 to change  ·  Enter to skip`, W / 2, H - 36, 16, '#aab4d4');
     const fr = (r.t * tune.replay_fps * tune.replay_speed) / r.frames.length;
-    top.rect(W / 2 - 160, H - 70, 320, 4).fill({ color: 0x2f3757 });
-    top.rect(W / 2 - 160, H - 70, 320 * Math.min(1, fr), 4).fill({ color: 0xffffff, alpha: 0.8 });
+    top.rect(W / 2 - 160, H - 66, 320, 4).fill({ color: 0x2f3757 });
+    top.rect(W / 2 - 160, H - 66, 320 * Math.min(1, fr), 4).fill({ color: 0xffffff, alpha: 0.8 });
   }
 
   function drawOverlays(): void {
     const p = me();
-    if (world.roundOver) {
-      top.rect(0, H / 2 - 110, W, 220).fill({ color: 0x03040b, alpha: 0.7 });
-      const win = world.winner === 0 ? 0 : 1;
-      T.put(`${TEAM[win].name} ${win === p.team ? 'wins the round' : 'takes the round'}`, W / 2, H / 2 - 50, 48, TEAM[win].css, 'center', true);
-      T.put(`Rounds won: Cyan ${world.roundsWon[0]}  ·  Amber ${world.roundsWon[1]}`, W / 2, H / 2 + 6, 20, '#d8deef');
-      T.put(`Next round in ${Math.ceil(world.roundOver)} s, right here (Enter to skip)`, W / 2, H / 2 + 46, 18, '#aab4d4');
-      return;
-    }
-    if (view.banner && p.alive) {
+    if (view.banner && p.alive && !held('Tab')) {
       const b = view.banner;
-      T.put(b.text, W / 2, 128, 28, b.team === undefined ? '#ffffff' : TEAM[b.team].css, 'center', true, Math.min(1, b.t * 2));
+      T.put(b.text, W / 2, 140, 26, b.color ?? '#ffffff', 'center', true, Math.min(1, b.t * 2));
     }
-    if (p.alive) return;
-    if (view.replay) { drawReplay(view.replay); return; }
-    top.rect(0, 0, W, H).fill({ color: 0x03040b, alpha: 0.72 });
-    T.put('Destroyed', W / 2, 150, 44, TEAM[p.team].css, 'center', true);
-    const by = p.lastHitBy >= 0 ? world.ships[p.lastHitBy] : undefined;
-    T.put(by ? `by ${by.name} flying a ${HULL_NAME[by.hull]} with ${WEAPON_NAME[by.weapon]}` : 'by the rocks', W / 2, 196, 18, '#d8deef');
-    T.put(`Relaunch in ${Math.max(0, p.respawn).toFixed(1)} s  ·  pick your loadout`, W / 2, 236, 20, '#aab4d4');
+    if (p.alive) { if (view.bigMap) drawBigMap(); return; }
+    if (view.replay) return; // drawn as the zone itself
+    top.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.7 });
+    T.put('Destroyed', W / 2, 150, 44, PAINT[0].css, 'center', true);
+    const by = p.lastHitBy >= 0 && p.lastHitBy !== ME ? world.ships[p.lastHitBy] : undefined;
+    T.put(by ? `by ${by.name}, flying a ${HULL_NAME[by.hull]}` : 'by your own hand', W / 2, 196, 18, TEXT_CSS);
+    T.put(`Relaunch in ${Math.max(0, p.respawn).toFixed(1)} s from the safe zone  ·  pick your hull`, W / 2, 236, 20, '#aab4d4');
     HULLS.forEach((h, i) => {
-      const x = W / 2 - 300 + i * 300, y = 340, sel = view.loadout.hull === h;
-      panel(TP, x - 120, y - 70, 240, 140, 0.95, sel ? (p.team === 0 ? 0x1f6a86 : 0x8a5a1c) : 0x26345c);
-      ship(TS, TS, top, h, p.team, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: simT, thrust: sel });
-      T.put(`${i + 1}  ${HULL_NAME[h]}`, x, y + 40, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
-      T.put(HULL_ROLE[h], x, y + 60, 14, '#8590b4');
-    });
-    WEAPONS.forEach((wp, i) => {
-      const x = W / 2 - 300 + i * 300, y = 500, sel = view.loadout.weapon === wp;
-      panel(TP, x - 120, y - 46, 240, 92, 0.95, sel ? (p.team === 0 ? 0x1f6a86 : 0x8a5a1c) : 0x26345c);
-      const demo = { team: p.team, kind: wp, vx: 1, vy: 0 };
-      for (const dy of wp === 'scatter' ? [-14, 0, 14] : [0]) shotSprite(TS, demo.team, wp, 1, 0, x + 30, y - 18 + dy, 1.2, false, simT);
-      T.put(`${'ZXC'[i]}  ${WEAPON_NAME[wp]}`, x, y + 10, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
-      T.put(WEAPON_ROLE[wp], x, y + 30, 14, '#8590b4');
+      const x = W / 2 - 300 + i * 300, y = 380, sel = view.hull === h;
+      panel(TP, x - 130, y - 80, 260, 170, 0.95, sel ? 0x1f5a86 : 0x1c2440);
+      ship(TS, TS, top, h, 0, x, y - 20, -Math.PI / 2, HULL_RADIUS[h] * 2.2, { t: simT, thrust: sel });
+      T.put(`${i + 1}  ${HULL_NAME[h]}`, x, y + 44, 18, sel ? '#ffffff' : '#aab4d4', 'center', true);
+      T.put(HULL_ROLE[h], x, y + 66, 13, DIM_CSS);
     });
   }
 
   function drawTitle(): void {
-    const t = simT;
-    drawStars(t * 30, t * 8);
-    ship(S, F, go, 'lancer', 0, W / 2 - 330, 150, 0.2 + Math.sin(t) * 0.1, 26, { thrust: true, t });
-    ship(S, F, go, 'bulwark', 1, W / 2 + 330, 150, Math.PI - 0.2 + Math.sin(t) * 0.1, 22, { thrust: true, t });
-    beacon({ owner: -1, progress: 0.4 + 0.3 * Math.sin(t), phase: 0 }, W / 2, 160, tune.beacon_radius * 0.42, 0.42, t);
-    L.put(TITLE, W / 2, 268, 72, '#ffffff', 'center', true);
-    L.put('Two fleets. Drifting beacons, salvage to grab, bounties to collect. One huge open zone.', W / 2, 324, 20, '#aab4d4');
-    MENU.forEach((m, i) => {
-      const y = 410 + i * 50, sel = i === menuAt;
-      panel(P, W / 2 - 300, y - 22, 600, 44, sel ? 0.95 : 0.55, sel ? 0x1f6a86 : 0x26345c);
-      if (sel) arrow(hud, W / 2 - 280, y, 0, 10, TEAM[0].main);
-      L.put(m, W / 2, y, 24, sel ? '#ffffff' : '#aab4d4', 'center', sel);
+    const t = simT, m = map();
+    // behind the menu: the zone itself, drifting slowly past
+    const c = (m.centre + 0.5) * TILE;
+    cam = { x: c + Math.cos(t * 0.03) * 1400, y: c + Math.sin(t * 0.023) * 900, s: 0.75 };
+    drawMap();
+    top.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.55 });
+    TS.put('ship_lancer_0', W / 2 - 300, 150, 0.6 + Math.sin(t) * 0.08, 64);
+    TS.put('ship_bulwark_1', W / 2 + 300, 150, -0.6 + Math.sin(t * 1.3) * 0.08, 64);
+    T.put(TITLE, W / 2, 230, 72, '#ffffff', 'center', true);
+    T.put('Every pilot for themselves. Grab salvage, run up a bounty, collect everyone else\'s.', W / 2, 286, 20, '#aab4d4');
+    MENU.forEach((mn, i) => {
+      const y = 380 + i * 54, sel = i === menuAt;
+      panel(TP, W / 2 - 300, y - 23, 600, 46, sel ? 0.95 : 0.7, sel ? 0x1f5a86 : 0x1c2440);
+      T.put(mn, W / 2, y, 23, sel ? '#ffffff' : '#aab4d4', 'center', sel);
     });
-    L.put('Up / Down to choose, Enter to go  ·  a gamepad works too', W / 2, H - 70, 16, '#8590b4');
-    L.put('Every other ship is a bot, named as a bot, until people join.', W / 2, H - 40, 16, '#8590b4');
+    T.put('Up / Down to choose, Enter to go  ·  a gamepad works too', W / 2, H - 70, 16, DIM_CSS);
+    T.put('Every other ship is a bot, named as a bot, until people join.', W / 2, H - 42, 16, DIM_CSS);
   }
 
   function drawFigures(): void {
     const t = simT;
+    cam = { x: 0, y: 0, s: 1 };
     drawStars(0, 0);
     L.put('Beacon Wars: every figure', W / 2, 40, 26, '#ffffff', 'center', true);
     HULLS.forEach((h, i) => {
-      for (const team of [0, 1] as Team[]) {
-        const x = 160 + i * 190, y = 140 + team * 165;
-        ship(S, F, go, h, team, x, y, -Math.PI / 2, HULL_RADIUS[h] * 2.2, { t, thrust: true });
-        L.put(`${HULL_NAME[h]} (${team ? 'amber' : 'cyan'})`, x, y + (h === 'bulwark' ? 70 : 60), 15, TEAM[team].css);
+      for (const pt of [0, 1] as Paint[]) {
+        const x = 140 + i * 150, y = 150 + pt * 150;
+        ship(S, F, go, h, pt, x, y, -Math.PI / 2, HULL_RADIUS[h] * 2, { t, thrust: true });
+        L.put(`${HULL_NAME[h]} (${pt ? 'foe' : 'you'})`, x, y + 56, 14, PAINT[pt].css);
       }
     });
-    ship(S, F, go, 'lancer', 0, 760, 150, -Math.PI / 2, HULL_RADIUS.lancer * 2.2, { you: true, t });
-    L.put('You (white chevron)', 760, 216, 15, '#ffffff');
-    ship(S, F, go, 'dart', 1, 760, 320, -Math.PI / 2, HULL_RADIUS.dart * 2.2, { t, low: true });
-    L.put('Low energy (dashed)', 760, 380, 15, TEAM[1].css);
-    const bs = 0.4, bR = tune.beacon_radius * bs;
-    beacon({ owner: 0, progress: 1, phase: 0 }, 960, 180, bR, bs, t);
-    L.put('Beacon (held)', 960, 180 - bR - 22, 15, TEAM[0].css, 'center', true);
-    beacon({ owner: 1, progress: -0.45, phase: 2 }, 1160, 180, bR, bs, t);
-    L.put('Beacon (being taken)', 1160, 180 - bR - 22, 15, TEAM[1].css, 'center', true);
-    beacon({ owner: -1, progress: 0, phase: 1 }, 1060, 470, bR, bs, t);
-    L.put('Beacon (neutral)', 1060, 470 - bR - 22, 15, '#9aa4c4', 'center', true);
-    const shape: [number, number][] = []; let s2 = 3;
-    for (let i = 0; i < 11; i++) { s2 = (s2 * 16807) % 2147483647; shape.push([(i / 11) * Math.PI * 2, 0.8 + (s2 / 2147483647) * 0.3]); }
-    rockSprite(S, { x: 0, y: 0, r: 60, shape, cracks: [], spin: 0 }, 160, 490, 1, 0);
-    L.put('Asteroid', 160, 570, 15, '#aab4d4');
-    mineSprite(S, F, 1, true, 350, 490, 2, t, settings.calm); L.put('Mine', 350, 570, 15, TEAM[1].css);
-    WEAPONS.forEach((k, i) => {
-      const team = (i === 2 ? 1 : 0) as Team;
-      shotSprite(F, team, k, 1, 0, 540 + i * 140, 490, 1.6, false, t);
-      L.put(WEAPON_NAME[k], 520 + i * 140, 570, 15, TEAM[team].css);
-    });
+    ship(S, F, go, 'dart', 1, 640, 150, -Math.PI / 2, HULL_RADIUS.dart * 2, { t, low: true });
+    L.put('Low energy', 640, 206, 14, PAINT[1].css);
+    ship(S, F, go, 'lancer', 0, 640, 300, -Math.PI / 2, HULL_RADIUS.lancer * 2, { t, shield: true });
+    L.put('Spawn shield', 640, 356, 14, SAFE_CSS);
+    S.put('salvage', 800, 150, t * 0.6, 30); F.put('glint', 800, 150, 0, 52, { add: true, tint: 0xb98cff, alpha: 0.75 });
+    L.put('Salvage pod', 800, 206, 14, '#c9a2ff');
+    mineSprite(S, F, 1, true, 800, 300, 1.6, t, settings.calm); L.put('Mine', 800, 356, 14, PAINT[1].css);
+    for (let lv = 1; lv <= 3; lv++) {
+      shot('bullet', lv, 960 + lv * 60, 150, 470, 0, 1.6, t);
+      shot('bomb', lv, 960 + lv * 60, 300, 400, 0, 1.6, t);
+    }
+    L.put('Bullets, levels 1 to 3', 1080, 206, 14, TEXT_CSS);
+    L.put('Bombs, levels 1 to 3', 1080, 356, 14, TEXT_CSS);
   }
 
   function drawSettings(): void {
@@ -714,33 +699,31 @@ async function start(): Promise<void> {
     L.put('Settings', W / 2, 90, 48, '#ffffff', 'center', true);
     SETTINGS_ROWS.forEach((r, i) => {
       const y = 170 + i * 54, sel = i === setAt;
-      panel(P, W / 2 - 380, y - 24, 760, 48, sel ? 0.95 : 0.5, sel ? 0x1f6a86 : 0x26345c);
+      panel(P, W / 2 - 380, y - 24, 760, 48, sel ? 0.95 : 0.5, sel ? 0x1f5a86 : 0x1c2440);
       L.put(r, W / 2 - 350, y, 22, sel ? '#ffffff' : '#aab4d4', 'left', sel);
       const v = settingText(i) + (typing && sel ? '_' : '');
-      L.put(v, W / 2 + 350, y, 22, sel ? TEAM[0].css : '#d8deef', 'right', true);
+      L.put(v, W / 2 + 350, y, 22, sel ? PAINT[0].css : TEXT_CSS, 'right', true);
     });
     const tip = typing ? 'Type, then Enter to keep it' : setAt >= 4 && setAt <= 5 ? 'Enter to type' : 'Left / Right to change  ·  Esc to go back';
-    L.put(tip, W / 2, H - 50, 18, '#8590b4');
+    L.put(tip, W / 2, H - 50, 18, DIM_CSS);
   }
   function drawHelp(): void {
     drawStars(simT * 20, 0);
-    L.put('How to play', W / 2, 70, 44, '#ffffff', 'center', true);
+    L.put('How to play', W / 2, 64, 44, '#ffffff', 'center', true);
     const lines = [
-      'Your ship drifts: it keeps moving the way it was going until you thrust another way.',
-      'Turn to face somewhere new and thrust to change course; turn around and thrust to stop.',
-      'Energy is your shield and your ammo. Shots, afterburn and mines spend it; it refills when you ease off.',
-      'A ship at zero energy is destroyed and relaunches from its gate a few seconds later.',
-      'Three beacons drift through the zone. Sit inside a ring with more ships than the other fleet to take it.',
-      'Every second a beacon is held, its fleet scores. Kills score too. The zone never closes: drop in any time.',
-      'Fly over glowing salvage pods for upgrades: energy, recharge, engines, guns, bouncing shots and more.',
-      'Pickups and kills raise your bounty. Whoever downs you collects it, and your upgrades are lost.',
-      'While you wait to relaunch, pick a hull (1 2 3) and a weapon (Z X C). The edges wrap around.',
+      'Your ship drifts: nothing slows it. Turn to face somewhere new and thrust; turn around and thrust to stop.',
+      'Walls bounce you off, a little slower. Guns fire small fast bullets; bombs burst and hurt everyone near.',
+      'Energy is your shield and your ammo. Guns, bombs, mines and the afterburner spend it; it refills on its own.',
+      'At zero energy you are destroyed, and you relaunch from the safe zone in the middle a few seconds later.',
+      'In the safe zone nobody can shoot or be shot. Leave it through the gaps in its wall.',
+      'It is a free-for-all: every other ship is a target. Fly over glowing salvage pods for upgrades.',
+      'Pickups and kills raise your bounty. Whoever downs you collects it as points, and your upgrades are lost.',
     ];
-    lines.forEach((l, i) => L.put(l, W / 2, 140 + i * 36, 18, '#d8deef'));
-    CONTROLS.forEach((c, i) => L.put(c, W / 2, 460 + i * 32, 17, '#aab4d4'));
-    L.put('Gamepad: point the stick to steer, A thrusts, X fires, LB afterburns, B drops a mine; respawning, X and Y pick the loadout', W / 2, 600, 16, '#8590b4');
-    L.put('Art: Kenney (kenney.nl), CC0', W / 2, 640, 14, '#8590b4');
-    L.put('Enter to go back', W / 2, H - 50, 20, TEAM[0].css, 'center', true);
+    lines.forEach((l, i) => L.put(l, W / 2, 130 + i * 36, 17, TEXT_CSS));
+    CONTROLS.forEach((c, i) => L.put(c, W / 2, 420 + i * 32, 16, '#aab4d4'));
+    L.put('Gamepad: point the stick to steer, A thrusts, X fires, RB fires a bomb, LB afterburns, B lays a mine', W / 2, 540, 15, DIM_CSS);
+    L.put('Ship and effect art: our own and Kenney (kenney.nl), CC0', W / 2, 600, 14, DIM_CSS);
+    L.put('Enter to go back', W / 2, H - 50, 20, PAINT[0].css, 'center', true);
   }
   function drawNet(): void {
     drawStars(simT * 20, 0);
@@ -748,53 +731,62 @@ async function start(): Promise<void> {
     if (!net || net.status === 'closed') {
       L.put(net?.reason || 'Not connected.', W / 2, 300, 22, '#ff8a96');
       L.put('Start a zone with "npm run server", or set its address in Settings.', W / 2, 350, 18, '#aab4d4');
-      L.put('Enter to go back', W / 2, H - 80, 22, TEAM[0].css, 'center', true);
+      L.put('Enter to go back', W / 2, H - 80, 22, PAINT[0].css, 'center', true);
     } else {
-      L.put(`Connecting to ${settings.server} as ${settings.name}...`, W / 2, 300, 22, '#d8deef');
-      L.put('Esc to cancel', W / 2, H - 80, 20, '#8590b4');
+      L.put(`Connecting to ${settings.server} as ${settings.name}...`, W / 2, 300, 22, TEXT_CSS);
+      L.put('Esc to cancel', W / 2, H - 80, 20, DIM_CSS);
     }
   }
+  /** Everyone in one list, by points: the free-for-all table. Long lists split into two columns. */
   function drawScoreboard(): void {
-    panel(TP, W / 2 - 430, 110, 860, 480, 0.96);
-    T.put('Scoreboard', W / 2, 140, 26, '#ffffff', 'center', true);
-    for (const team of [0, 1] as Team[]) {
-      const x = W / 2 - 410 + team * 430;
-      T.put(`${TEAM[team].name}  ${Math.floor(world.scores[team])}${tune.rounds ? `  ·  rounds ${world.roundsWon[team]}` : ''}`, x, 180, 18, TEAM[team].css, 'left', true);
-      T.put('Pilot', x, 210, 14, '#8590b4', 'left'); T.put('Ship', x + 170, 210, 14, '#8590b4', 'left');
-      T.put('Pts', x + 250, 210, 14, '#8590b4', 'left'); T.put('Bounty', x + 295, 210, 14, '#8590b4', 'left');
-      T.put('K', x + 355, 210, 14, '#8590b4', 'left'); T.put('D', x + 385, 210, 14, '#8590b4', 'left');
-      world.ships.filter(sh => sh.team === team).sort((a, b) => b.points - a.points || b.kills - a.kills || a.deaths - b.deaths).forEach((sh, i) => {
-        const y = 236 + i * 22, c = sh.id === ME ? '#ffffff' : sh.human ? '#e6f6ff' : '#aab4d4';
-        T.put(sh.name, x, y, 15, c, 'left', sh.id === ME); T.put(HULL_NAME[sh.hull], x + 170, y, 15, c, 'left');
-        T.put(`${sh.points}`, x + 250, y, 15, c, 'left'); T.put(sh.alive ? `${sh.bounty}` : '-', x + 295, y, 15, sh.alive && sh.bounty >= tune.bounty_start * 4 ? GOLD : c, 'left');
-        T.put(`${sh.kills}`, x + 355, y, 15, c, 'left'); T.put(`${sh.deaths}`, x + 385, y, 15, c, 'left');
+    const rows = world.ships.slice().sort((a, b) => b.points - a.points || b.kills - a.kills || a.deaths - b.deaths);
+    const per = 18, cols = rows.length > per ? 2 : 1, cw = 520, w = cols * cw + 40, x0 = W / 2 - w / 2;
+    panel(TP, x0, 90, w, 110 + Math.min(per, rows.length) * 24, 0.96);
+    T.put('Scores', W / 2, 118, 24, '#ffffff', 'center', true);
+    for (let c = 0; c < cols; c++) {
+      const x = x0 + 24 + c * cw;
+      const head: [string, number][] = [['#', 0], ['Pilot', 30], ['Ship', 220], ['Points', 300], ['Bounty', 370], ['K', 445], ['D', 480]];
+      for (const [h, dx] of head) T.put(h, x + dx, 156, 13, DIM_CSS, 'left');
+      rows.slice(c * per, (c + 1) * per).forEach((sh, i) => {
+        const y = 182 + i * 24, n = c * per + i + 1, mine = sh.id === ME, col = mine ? PAINT[0].css : sh.human ? '#ffffff' : '#aab4d4';
+        if (mine) topMarks.rect(x - 8, y - 11, cw - 20, 22).fill({ color: PAINT[0].main, alpha: 0.12 });
+        T.put(`${n}`, x, y, 14, col, 'left');
+        T.put(mine ? `${sh.name}` : sh.name, x + 30, y, 14, col, 'left', mine);
+        T.put(HULL_NAME[sh.hull], x + 220, y, 14, col, 'left');
+        T.put(`${sh.points}`, x + 300, y, 14, col, 'left', true);
+        T.put(sh.alive ? `${sh.bounty}` : '-', x + 370, y, 14, sh.alive && sh.bounty >= tune.bounty_start * 4 ? GOLD_CSS : col, 'left');
+        T.put(`${sh.kills}`, x + 445, y, 14, col, 'left'); T.put(`${sh.deaths}`, x + 480, y, 14, col, 'left');
       });
     }
   }
 
   function draw(): void {
     look.calm = settings.calm;
-    let glowK = 1; // Round won is the only state with full bloom; Round lost drains it (art bible §2)
-    if ((scene === 'play' || scene === 'pause') && world.roundOver > 0 && world.winner !== -1) {
-      const e = Math.min(1, (tune.round_break - world.roundOver) / 0.6);
-      glowK = world.winner === me().team ? 1 + 0.6 * e : 1 - 0.55 * e;
-    }
-    bloom.alpha = (settings.calm ? 0.45 : 0.9) * (settings.calm ? Math.min(1, glowK) : glowK);
-    g.clear(); gb.clear(); go.clear(); hud.clear(); top.clear(); L.begin(); T.begin(); S.begin(); F.begin(); TS.begin(); P.begin(); TP.begin();
+    bloom.alpha = settings.calm ? 0.4 : 0.85;
+    g.clear(); gb.clear(); go.clear(); hud.clear(); radarBack.clear(); top.clear(); topMarks.clear(); radarMask.clear();
+    L.begin(); T.begin(); S.begin(); F.begin(); TS.begin(); P.begin(); TP.begin();
+    radarPic.visible = false; bigPic.visible = false; tiles.hide();
     if (scene === 'title') drawTitle();
     else if (scene === 'settings') drawSettings();
     else if (scene === 'help') drawHelp();
     else if (scene === 'net') drawNet();
     else if (scene === 'figures') drawFigures();
     else {
-      drawZone(); drawHUD(); drawOverlays();
+      const r = !me().alive ? view.replay : null;
+      if (r) { // the replay: the zone as it was, round where you went down
+        cam = { x: r.at.x, y: r.at.y, s: tune.zoom };
+        drawMap(); drawReplay(r);
+      } else {
+        cam = { x: view.cam.x, y: view.cam.y, s: tune.zoom };
+        drawZone(); drawHUD();
+      }
+      drawOverlays();
       if (scene === 'pause') {
-        top.rect(0, 0, W, H).fill({ color: 0x03040b, alpha: 0.6 });
+        top.rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.6 });
         T.put('Paused', W / 2, H / 2 - 20, 48, '#ffffff', 'center', true);
         T.put(net ? 'P to carry on (the zone keeps going)  ·  Q to leave the zone  ·  M to mute' : 'P to carry on  ·  Q to quit to the menu  ·  M to mute', W / 2, H / 2 + 30, 20, '#aab4d4');
       }
       if (held('Tab') && scene === 'play') drawScoreboard();
-      if (net && scene === 'play') L.put(`online  ·  ${net.ping} ms`, 20, 102, 14, '#8590b4', 'left');
     }
     L.end(); T.end(); S.end(); F.end(); TS.end(); P.end(); TP.end();
     if (bloom.visible) app.renderer.render({ container: lit, target: glowRT, clear: true });

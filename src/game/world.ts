@@ -1,74 +1,28 @@
-// Making a zone: the mirrored asteroid field, the beacons, the fleets and their gates.
+// Making a zone: the map seed, the pilots, and launching a ship from the safe zone.
+// Free-for-all: every pilot is against every other (decision #36, Oscar's pick).
 
-import { dist, rand, wd, wrap } from './math';
-import {
-  HULLS, UPGRADES, WEAPONS, type Asteroid, type Beacon, type Hull, type Ship, type Team, type Tuning, type Weapon, type World,
-} from './types';
+import { rand } from './math';
+import { NAV, SAFE, TILE, tileAt, zoneMap } from './map';
+import { seedSalvage } from './salvage';
+import { HULLS, UPGRADES, type Hull, type Ship, type Tuning, type World } from './types';
 
 /** Bot call signs: the game's own, chosen to read as people. */
 export const BOT_NAMES = ['Rook', 'Vex', 'Sable', 'Quill', 'Juno', 'Brisk', 'Talon', 'Moss', 'Pike', 'Wren', 'Cinder',
   'Hollis', 'Ash', 'Fennel', 'Kestrel', 'Ober', 'Lumen', 'Dace', 'Marrow', 'Tansy', 'Corvo', 'Ivo', 'Zell', 'Brannock',
   'Petra', 'Hask', 'Orrin', 'Sorrel', 'Tamsin', 'Vane', 'Wick', 'Yarrow', 'Ember', 'Glint', 'Harrow', 'Isla', 'Jory', 'Knell'];
 
-/** Where a fleet launches: a quarter of the zone in from the middle, on the horizontal line. */
-export function gate(team: Team, size: number): { x: number; y: number } {
-  return { x: team === 0 ? size / 4 : (size * 3) / 4, y: size / 2 };
-}
+/** A random hull from the world's rng. */
+export function randomHull(w: { seed: number }): Hull { return HULLS[Math.floor(rand(w) * HULLS.length)]; }
 
-/** The asteroid field: generated on one half, mirrored onto the other, so neither fleet is favoured. */
-export function makeAsteroids(w: { seed: number }, size: number, count: number): Asteroid[] {
-  const out: Asteroid[] = [];
-  const keepClear: [number, number, number][] = [
-    [size / 4, size / 2, 420], [(size * 3) / 4, size / 2, 420], [size / 2, size / 2, 300], [0, size / 2, 300], [size / 2, 0, 300],
-  ];
-  let tries = 0;
-  while (out.length < count && tries++ < 2000) {
-    const r = 45 + rand(w) * 85, x = rand(w) * (size / 2 - 60) + 30, y = rand(w) * size;
-    const p = { x, y };
-    if (keepClear.some(([cx, cy, cr]) => dist(p, { x: cx, y: cy }, size) < cr + r)) continue;
-    if (out.some(o => dist(p, o, size) < o.r + r + 90)) continue;
-    const n = 9 + Math.floor(rand(w) * 4), shape: [number, number][] = [];
-    for (let i = 0; i < n; i++) shape.push([(i / n) * Math.PI * 2, 0.8 + rand(w) * 0.3]);
-    const cracks: [number, number, number][] = [];
-    for (let i = 0; i < 2; i++) cracks.push([(rand(w) - 0.5) * 0.9, (rand(w) - 0.5) * 0.9, 0.12 + rand(w) * 0.12]);
-    const spin = rand(w) * 6.28;
-    out.push({ x, y, r, shape, cracks, spin });
-    out.push({
-      x: size - x, y, r, spin: -spin,
-      shape: shape.map(([a, k]) => [Math.PI - a, k] as [number, number]),
-      cracks: cracks.map(([cx, cy, cr]) => [-cx, cy, cr] as [number, number, number]),
-    });
-  }
-  return out;
-}
-
-/** Three beacons on the zone's axis of symmetry, each with its own drift. */
-export function makeBeacons(size: number, drift: number): Beacon[] {
-  const base: [string, number, number, number, number][] = [
-    ['Beacon North', size / 2, 0, 1, 0],
-    ['Beacon Core', size / 2, size / 2, 0, 1],
-    ['Beacon Rim', 0, size / 2, 0, -1],
-  ];
-  return base.map(([label, x, y, dx, dy], i) => ({
-    label, x, y, vx: dx * drift, vy: dy * drift, owner: -1, progress: 0, phase: i * 2.1,
-  }));
-}
-
-/** A random loadout from the world's rng. */
-export function randomLoadout(w: { seed: number }): { hull: Hull; weapon: Weapon } {
-  return { hull: HULLS[Math.floor(rand(w) * 3)], weapon: WEAPONS[Math.floor(rand(w) * 3)] };
-}
-
-function newShip(id: number, team: Team, slot: number, name: string): Ship {
+function newShip(id: number, name: string): Ship {
   return {
-    id, team, slot, name, human: false,
-    hull: 'lancer', weapon: 'bolt', nextHull: 'lancer', nextWeapon: 'bolt',
-    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, mineCool: 0,
+    id, name, human: false, hull: 'lancer', nextHull: 'lancer',
+    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, bombCool: 0, mineCool: 0, shield: 0,
     thrusting: false, burning: false, flash: 0, kills: 0, deaths: 0, lastHitBy: -1,
     up: UPGRADES.map(() => 0), bounty: 0, points: 0,
     brain: {
-      think: 0, aimA: 0, wobble: 0, home: slot % 3, target: -1,
-      wantThrust: false, wantRev: false, wantBurn: false, wantFire: false, wantMine: false,
+      think: 0, aimA: 0, wobble: 0, target: -1, path: [], replan: 0, goalX: 0, goalY: 0, stuck: 0,
+      wantThrust: false, wantRev: false, wantBurn: false, wantFire: false, wantBomb: false, wantMine: false,
     },
   };
 }
@@ -76,63 +30,67 @@ function newShip(id: number, team: Team, slot: number, name: string): Ship {
 /** Options for a new zone. */
 export interface WorldOptions {
   seed: number;
-  /** Ship ids that start as human seats (default: ship 0, the first cyan ship). */
+  /** The map's seed (default: the same as `seed`). */
+  mapSeed?: number;
+  /** Ship ids that start as human seats (default: ship 0). */
   humans?: number[];
 }
 
 /**
- * A new zone: asteroids, beacons and two full fleets. Every seat is a bot except the ones in
- * `humans`; a person joining later takes a bot's seat with {@link takeSeat}.
+ * A new zone: the map, half its salvage, and `pilots` ships, every one launched. Every seat is a
+ * bot except the ones in `humans`; a person joining later takes a bot's seat with {@link takeSeat}.
  */
 export function newWorld(tune: Tuning, opts: WorldOptions): World {
-  const size = tune.world_size;
+  const tiles = tune.map_tiles;
   const w: World = {
-    seed: opts.seed | 0, size, t: 0, roundT: 0, round: 1, scores: [0, 0], roundsWon: [0, 0],
-    roundOver: 0, winner: -1, grouped: false, groupTarget: -1, groupTeam: 1,
-    asteroids: [], beacons: [], ships: [], shots: [], mines: [], events: [],
-    salvage: [], nextSalvage: 0, salvageClock: 0,
+    seed: opts.seed | 0, mapSeed: (opts.mapSeed ?? opts.seed) | 0, tiles, size: tiles * TILE, t: 0,
+    ships: [], shots: [], mines: [], events: [], salvage: [], nextSalvage: 0, salvageClock: 0,
   };
-  w.asteroids = makeAsteroids(w, size, tune.asteroids);
-  w.beacons = makeBeacons(size, tune.beacon_drift);
   const names = BOT_NAMES.slice();
   for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(rand(w) * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
-  const n = tune.fleet_size, humans = opts.humans ?? [0];
-  for (let team = 0 as Team; team < 2; team = (team + 1) as Team) {
-    for (let i = 0; i < n; i++) {
-      const sh = newShip(w.ships.length, team, i, 'BOT ' + (names.pop() ?? `Unit ${w.ships.length}`));
-      if (humans.includes(sh.id)) { sh.human = true; sh.name = 'You'; }
-      else { const l = randomLoadout(w); sh.nextHull = l.hull; sh.nextWeapon = l.weapon; }
-      w.ships.push(sh);
-    }
+  const humans = opts.humans ?? [0];
+  for (let i = 0; i < tune.pilots; i++) {
+    const sh = newShip(i, 'BOT ' + (names.pop() ?? `Unit ${i}`));
+    if (humans.includes(i)) { sh.human = true; sh.name = 'You'; }
+    else sh.nextHull = randomHull(w);
+    w.ships.push(sh);
   }
+  seedSalvage(w, tune);
+  for (const sh of w.ships) launch(w, sh, tune, !sh.human);
   return w;
 }
 
-/** Puts a ship back at its fleet's gate (or, with head > 0, part-way to its home beacon). */
-export function launch(w: World, sh: Ship, tune: Tuning, head = 0): void {
-  const size = w.size, g = gate(sh.team, size);
-  sh.hull = sh.nextHull; sh.weapon = sh.nextWeapon;
-  const spread = ((sh.slot % 5) - 2) * 46, row = Math.floor(sh.slot / 5) * 46;
-  sh.x = wrap(g.x + (sh.team ? row : -row), size); sh.y = wrap(g.y + spread, size);
-  sh.a = sh.team === 0 ? 0 : Math.PI;
-  sh.vx = Math.cos(sh.a) * 120; sh.vy = Math.sin(sh.a) * 120;
-  if (head > 0 && !sh.human) { // bots start part-way out, so the zone is already busy
-    const b = w.beacons[sh.brain.home];
-    sh.x = wrap(sh.x + wd(sh.x, b.x, size) * head + (rand(w) - 0.5) * 200, size);
-    sh.y = wrap(sh.y + wd(sh.y, b.y, size) * head + (rand(w) - 0.5) * 200, size);
-    sh.a = Math.atan2(wd(sh.y, b.y, size), wd(sh.x, b.x, size));
-    sh.vx = Math.cos(sh.a) * 160; sh.vy = Math.sin(sh.a) * 160;
+/**
+ * Launches a ship: a fresh hull at a random spot in the safe zone (or, with `out`, for bots at
+ * the start of a zone, anywhere open in the map so the zone is busy from the first second).
+ */
+export function launch(w: World, sh: Ship, tune: Tuning, out = false): void {
+  const m = zoneMap(w.mapSeed, w.tiles);
+  sh.hull = sh.nextHull;
+  let x = m.centre * TILE, y = m.centre * TILE;
+  for (let tries = 0; tries < 60; tries++) {
+    if (out) {
+      const cx = Math.floor(rand(w) * m.navN), cy = Math.floor(rand(w) * m.navN);
+      if (!m.nav[cy * m.navN + cx]) continue;
+      x = (cx + 0.5) * NAV * TILE; y = (cy + 0.5) * NAV * TILE; break;
+    }
+    const a = rand(w) * Math.PI * 2, r = Math.sqrt(rand(w)) * (m.safeR - 2) * TILE;
+    const px = m.centre * TILE + Math.cos(a) * r, py = m.centre * TILE + Math.sin(a) * r;
+    if (tileAt(m, Math.floor(px / TILE), Math.floor(py / TILE)) === SAFE) { x = px; y = py; break; }
   }
+  sh.x = x; sh.y = y; sh.vx = 0; sh.vy = 0; sh.a = rand(w) * Math.PI * 2;
   sh.up = UPGRADES.map(() => 0); sh.bounty = tune.bounty_start; // a fresh ship: no salvage, base bounty
-  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.flash = 0; sh.respawn = 0;
+  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.bombCool = 0.5; sh.mineCool = 0.5;
+  sh.flash = 0; sh.respawn = 0; sh.shield = out ? 0 : tune.spawn_shield;
+  sh.brain.path = []; sh.brain.replan = 0;
 }
 
 /**
  * A person takes a seat: the bot flying it steps out and the seat becomes human, keeping its
- * ship where it is. Returns the ship id, or -1 when the team has no bot seat left.
+ * ship where it is. Returns the ship id, or -1 when every seat is taken.
  */
-export function takeSeat(w: World, team: Team, name: string): number {
-  const sh = w.ships.find(s => s.team === team && !s.human);
+export function takeSeat(w: World, name: string): number {
+  const sh = w.ships.find(s => !s.human);
   if (!sh) return -1;
   sh.human = true; sh.name = name;
   return sh.id;

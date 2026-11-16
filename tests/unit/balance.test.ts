@@ -1,33 +1,34 @@
-// Vitest: a bot-only balance smoke for the open zone. Twenty bots fly five minutes on four seeds;
-// neither fleet may run away with the score, and kills, pickups and bounty payouts must all happen.
-// A broken tuning change shows up here first.
+// Vitest: a bot-only balance smoke for the free-for-all zone. A full zone of bots flies five
+// minutes on four seeds; kills, pickups and bounty payouts must all happen, and no single hull may
+// run away with the points. A broken tuning change shows up here first.
 import { describe, expect, it } from 'vitest';
 import config from '../../data/config.json';
-import { startRound, step, STEP } from '../../src/game/sim';
+import { step, STEP } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
+import { HULLS } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
 
 const SEEDS = [1, 2, 3, 4], MINUTES = 5;
 
 describe('bot-only balance', () => {
-  it('shares the score fairly between the fleets, with fights, pickups and bounties in every zone', () => {
-    const tune = tuningFrom(config), totals = [0, 0];
+  it('has fights, pickups and bounties in every zone, and no hull takes most of the kills', () => {
+    const tune = tuningFrom(config), byHull: Record<string, number> = { dart: 0, lancer: 0, bulwark: 0 };
     for (const seed of SEEDS) {
-      const w = newWorld(tune, { seed, humans: [] }); startRound(w, tune);
+      const w = newWorld(tune, { seed, humans: [] });
       let kills = 0, pickups = 0, paid = 0;
       while (w.t < MINUTES * 60) {
         step(w, new Map(), tune, STEP);
         for (const e of w.events) {
-          if (e.type === 'kill') { kills++; paid += e.bounty; }
+          if (e.type === 'kill') { kills++; paid += e.bounty; if (e.by >= 0) byHull[w.ships[e.by].hull]++; }
           if (e.type === 'salvage') pickups++;
         }
         w.events = [];
       }
-      totals[0] += w.scores[0]; totals[1] += w.scores[1];
-      expect(kills).toBeGreaterThan(10);
-      expect(pickups).toBeGreaterThan(20);
+      expect(kills).toBeGreaterThan(30);
+      expect(pickups).toBeGreaterThan(60);
       expect(paid).toBeGreaterThan(0);
     }
-    expect(Math.min(...totals) / (totals[0] + totals[1])).toBeGreaterThan(0.35);
+    const all = HULLS.reduce((a, h) => a + byHull[h], 0);
+    for (const h of HULLS) expect(byHull[h] / all).toBeLessThan(0.6);
   }, 300000);
 });

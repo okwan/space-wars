@@ -2,14 +2,14 @@
 import { describe, expect, it } from 'vitest';
 import config from '../../data/config.json';
 import { grantUpgrade, maxEnergy, payBounty, seedSalvage, topSpeed, updateSalvage } from '../../src/game/salvage';
-import { damage, startRound, step, STEP } from '../../src/game/sim';
+import { damage, step, STEP } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
 import { UPGRADES, type Tuning, type World } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
 
 const tune: Tuning = tuningFrom(config);
 function zone(seed = 11): World {
-  const w = newWorld(tune, { seed }); startRound(w, tune); w.events = []; return w;
+  const w = newWorld(tune, { seed }); w.events = []; return w;
 }
 
 describe('salvage', () => {
@@ -55,7 +55,7 @@ describe('salvage', () => {
 
 describe('bounty', () => {
   it('a kill pays the victim bounty as points and raises the killer bounty', () => {
-    const w = zone(), killer = w.ships[0], victim = w.ships[tune.fleet_size];
+    const w = zone(), killer = w.ships[0], victim = w.ships[1];
     victim.bounty = 40; killer.bounty = 5;
     const paid = payBounty(killer, victim, tune);
     expect(paid).toBe(40);
@@ -63,7 +63,8 @@ describe('bounty', () => {
     expect(killer.bounty).toBe(5 + Math.max(tune.bounty_kill_min, Math.round(40 * tune.bounty_kill_share)));
   });
   it('dying loses the bounty and every upgrade', () => {
-    const w = zone(), killer = w.ships[0], victim = w.ships[tune.fleet_size];
+    const w = zone(), killer = w.ships[0], victim = w.ships[1], pod = w.salvage[0];
+    Object.assign(victim, { x: pod.x, y: pod.y, shield: 0 }); // out in the open, where it can be hurt
     victim.bounty = 30; victim.up = victim.up.map(() => 1);
     damage(w, victim, 1e9, killer.id, tune);
     expect(victim.alive).toBe(false);
@@ -80,12 +81,18 @@ describe('bounty', () => {
 
 describe('bots around people', () => {
   const nearby = (share: number) => {
-    const t2 = { ...tune, bot_company_share: share }, w = newWorld(t2, { seed: 9, humans: [0] }); startRound(w, t2);
-    const me = w.ships[0];
-    for (let i = 0; i < 60 * 90; i++) { me.x = w.size / 2; me.y = w.size / 8; me.vx = me.vy = 0; me.energy = 1e6; step(w, new Map(), t2, STEP); }
-    return w.ships.filter(s => !s.human && s.alive && Math.hypot(s.x - me.x, s.y - me.y) < tune.bot_company_range).length;
+    const t2 = { ...tune, bot_company_share: share }, w = newWorld(t2, { seed: 9, humans: [0] });
+    const me = w.ships[0], spot = { x: w.salvage[0].x, y: w.salvage[0].y }; // an open spot away from the safe zone
+    let sum = 0, n = 0;
+    for (let i = 0; i < 60 * 90; i++) {
+      me.x = spot.x; me.y = spot.y; me.vx = me.vy = 0; me.energy = 1e6; step(w, new Map(), t2, STEP);
+      if (i >= 60 * 30 && i % 30 === 0) { // the average over the last minute, within a couple of screens
+        sum += w.ships.filter(s => !s.human && s.alive && Math.hypot(s.x - me.x, s.y - me.y) < tune.bot_company_range * 2).length; n++;
+      }
+    }
+    return sum / n;
   };
-  it('keep more bots near a lone pilot far from the beacons than bots left to themselves', () => {
+  it('keep more bots within a couple of screens of a lone pilot than bots left to themselves', () => {
     const a = nearby(tune.bot_company_share), b = nearby(0);
     expect(a).toBeGreaterThan(b);
     expect(a).toBeGreaterThanOrEqual(6); // the research target: six to ten ships near each person

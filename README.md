@@ -5,11 +5,11 @@ shooters. Built with TypeScript, Vite and PixiJS 8, and developed with a Claude 
 
 ## The game
 
-Two fleets of drift-and-thrust ships fight across one huge, endless wrap-around zone. Fly over drifting salvage pods
-for upgrades that last until you die; pickups and kills raise your bounty, and whoever downs you collects it. Drifting
-beacons tick your fleet's score while you hold them. (A rounds mode, first fleet to the target, is one setting away.) Energy is
-your shield and your ammo. Every seat no person holds is flown by a bot, named as a bot, and a bot steps out when a
-person joins. The design is the one-page brief, `design/game-brief.md`.
+A free-for-all in one big walled zone: every pilot, real or bot, against every other. Ships fly by drift and
+thrust with no drag and bounce off steel tile walls; guns, splash bombs and mines all spend energy, which is also your
+shield. Fly over salvage pods for upgrades that last until you die; pickups and kills raise your bounty, and whoever
+downs you collects it. The safe zone in the middle stops all fire. Every seat no person holds is flown by a bot, named
+as a bot, and a bot steps out when a person joins. The design is the one-page brief, `design/game-brief.md`.
 
 ## Play and test
 
@@ -24,10 +24,10 @@ npm run build:single # one self-contained dist-single/index.html
 
 | Folder | What is there |
 |---|---|
-| `src/game/` | The rules: pure, deterministic TypeScript (flight, weapons, beacons, salvage and bounty, rounds, bots, seats). Runs in the browser and on the server. |
+| `src/game/` | The rules: pure, deterministic TypeScript (the tile map and routing, flight, weapons, salvage and bounty, bots, seats). Runs in the browser and on the server. |
 | `src/net/`, `server/` | The online zone: wire format, browser client, Node server (`docs/architecture/adr-0001-online-zone.md`). |
-| `src/main.ts`, `src/render/` | The client: scenes, HUD, camera and the neon vector art, drawn with PixiJS 8. |
-| `data/config.json` | Every tuning value (speeds, energy, weapons, beacons, bots), each with its range. |
+| `src/main.ts`, `src/render/` | The client: scenes, HUD, radar, camera, tile walls and sprites, drawn with PixiJS 8. |
+| `data/config.json` | Every tuning value (speeds, energy, weapons, salvage, bounty, bots), each with its range. |
 | `prototypes/beacon-wars/` | The first one-file prototype, kept as it was built. |
 
 ## The studio workspace
