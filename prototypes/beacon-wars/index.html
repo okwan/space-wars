@@ -1,0 +1,923 @@
+<!doctype html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<!-- Question: Is drift-and-thrust dogfighting over moving beacons fun for ten minutes in a zone full of bots? -->
+<!-- Date: 2026-11-16 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon Wars</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font-variant-numeric: tabular-nums; }
+  canvas { display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="config.js"></script>
+<script>
+'use strict';
+// Beacon Wars: two fleets of drift-and-thrust ships fight over three drifting beacons in a
+// wrap-around asteroid zone. You fly one cyan ship; every other seat is a bot, named as a bot.
+
+// ---- Built to be checked ----------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const tune = new Proxy({}, { get: (_, k) => CONFIG[k].value }); // live: tune.speed is CONFIG.speed.value
+const STEP = 1 / 60;            // simulation step in seconds; motion is per second, never per frame
+const W = 1280, H = 720;        // logical size
+const PIXEL = false;
+const FONT = '"Trebuchet MS", "Segoe UI", sans-serif';
+const TITLE = 'Beacon Wars';
+const CONTROLS = [
+  'Left / Right (or A / D): turn     Up (or W): thrust     Down (or S): reverse',
+  'Space: fire     Shift: afterburn     E: drop a mine',
+  'While respawning: 1 / 2 / 3 pick a hull, Z / X / C pick a weapon',
+  'P: pause     M: mute',
+];
+const clock = window.GAME_CLOCK || { now: () => performance.now() / 1000 }; // a check may inject one
+const CHEAP = params.get('render') === 'cheap';
+let seed;
+function rng() { // mulberry32; every gameplay random call reads this, never Math.random
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const events = []; // window.game.events
+
+// ---- Screen ---------------------------------------------------------------------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() {
+  const k = Math.min(innerWidth / W, innerHeight / H);
+  const s = PIXEL ? Math.max(1, Math.floor(k)) : k;
+  const r = PIXEL ? 1 : s * (devicePixelRatio || 1);
+  canvas.width = Math.round(W * r); canvas.height = Math.round(H * r);
+  canvas.style.width = Math.round(W * s) + 'px'; canvas.style.height = Math.round(H * s) + 'px';
+  canvas.style.marginTop = Math.max(0, Math.floor((innerHeight - H * s) / 2)) + 'px';
+  canvas.style.imageRendering = PIXEL ? 'pixelated' : 'auto';
+  ctx.setTransform(r, 0, 0, r, 0, 0); ctx.imageSmoothingEnabled = !PIXEL;
+}
+addEventListener('resize', fit); fit();
+function clear(c) { ctx.fillStyle = c; ctx.fillRect(0, 0, W, H); }
+function text(s, x, y, size, c, align = 'center', weight = '') {
+  ctx.fillStyle = c; ctx.font = `${weight} ${size}px ${FONT}`; ctx.textAlign = align;
+  ctx.textBaseline = 'middle'; ctx.fillText(s, x, y);
+}
+
+// ---- Input ------------------------------------------------------------------------------
+const down = new Set(), hit = new Set();
+const pressed = code => hit.has(code);
+const held = (...codes) => codes.some(c => down.has(c));
+addEventListener('keydown', e => {
+  startAudio();
+  if (!e.repeat) { down.add(e.code); hit.add(e.code); }
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+});
+addEventListener('keyup', e => down.delete(e.code));
+addEventListener('pointerdown', () => startAudio());
+addEventListener('blur', () => down.clear());
+
+// ---- Audio ------------------------------------------------------------------------------
+let audio = null, muted = false;
+function startAudio() {
+  if (!audio) {
+    const ac = window.GAME_AUDIO || new (window.AudioContext || window.webkitAudioContext)();
+    const out = ac.createGain(); out.gain.value = muted ? 0 : tune.volume;
+    out.connect(ac.destination); audio = { ac, out };
+  }
+  if (audio.ac.state === 'suspended') audio.ac.resume();
+}
+function setMuted(m) { muted = m; if (audio) audio.out.gain.value = m ? 0 : tune.volume; }
+addEventListener('tune', () => setMuted(muted));
+function tone(freq, dur, type = 'square', vol = 0.3, slide = 0) {
+  if (!audio || muted) return;
+  const t = audio.ac.currentTime, o = audio.ac.createOscillator(), g = audio.ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(audio.out); o.start(t); o.stop(t + dur);
+}
+const sfx = {
+  shoot: () => tone(880, 0.06, 'square', 0.05, 0.6),
+  heavy: () => tone(300, 0.14, 'sawtooth', 0.08, 0.5),
+  hit: () => tone(200, 0.08, 'triangle', 0.12, 0.7),
+  boom: () => { tone(120, 0.45, 'sawtooth', 0.2, 0.3); tone(70, 0.6, 'triangle', 0.2, 0.5); },
+  kill: () => { tone(660, 0.1, 'square', 0.12); setTimeout(() => tone(990, 0.16, 'square', 0.12), 70); },
+  capture: () => { tone(523, 0.12, 'triangle', 0.18); setTimeout(() => tone(784, 0.25, 'triangle', 0.18), 110); },
+  lost: () => tone(330, 0.35, 'triangle', 0.15, 0.6),
+  mine: () => tone(160, 0.12, 'square', 0.1, 1.5),
+};
+
+// ---- Palette and art ---------------------------------------------------------------------
+const TEAM = [
+  { name: 'Cyan fleet', main: '#2ef2ff', glow: 'rgba(46,242,255,0.28)', dim: '#0f5a66' },
+  { name: 'Amber fleet', main: '#ffb030', glow: 'rgba(255,176,48,0.28)', dim: '#6a4612' },
+];
+const NEUTRAL = '#9aa4c4';
+const HULLS = ['dart', 'lancer', 'bulwark'];
+const HULL_NAME = { dart: 'Dart', lancer: 'Lancer', bulwark: 'Bulwark' };
+const HULL_ROLE = { dart: 'light: quick, fragile', lancer: 'medium: all-round', bulwark: 'heavy: slow, tough' };
+const WEAPONS = ['bolt', 'rico', 'scatter'];
+const WEAPON_NAME = { bolt: 'Bolts', rico: 'Ricochet', scatter: 'Scatter' };
+const WEAPON_ROLE = { bolt: 'rapid fire', rico: 'bounces off rock', scatter: 'three-shot spread' };
+const HULL_RADIUS = { dart: 12, lancer: 15, bulwark: 20 };
+// Ship outlines, nose pointing +x, in units of the hull radius. Each hull its own silhouette.
+const SHAPES = {
+  dart: [[1.5, 0], [-0.4, 0.45], [-1.1, 1.2], [-0.7, 0.25], [-0.9, 0], [-0.7, -0.25], [-1.1, -1.2], [-0.4, -0.45]],
+  lancer: [[1.7, 0], [0.6, 0.22], [0.1, 0.95], [-0.5, 1.0], [-0.55, 0.45], [-1.0, 0.45], [-1.0, -0.45], [-0.55, -0.45], [-0.5, -1.0], [0.1, -0.95], [0.6, -0.22]],
+  bulwark: [[1.25, 0.35], [0.75, 0.35], [0.9, 0.8], [0.1, 1.05], [-0.85, 0.85], [-1.05, 0.3], [-1.05, -0.3], [-0.85, -0.85], [0.1, -1.05], [0.9, -0.8], [0.75, -0.35], [1.25, -0.35]],
+};
+const ENGINES = { dart: [[-0.9, 0]], lancer: [[-1.0, 0.25], [-1.0, -0.25]], bulwark: [[-1.05, 0.5], [-1.05, -0.5], [-1.05, 0]] };
+const BOT_NAMES = ['Rook', 'Vex', 'Sable', 'Quill', 'Juno', 'Brisk', 'Talon', 'Moss', 'Pike', 'Wren', 'Cinder',
+  'Hollis', 'Ash', 'Fennel', 'Kestrel', 'Ober', 'Lumen', 'Dace', 'Marrow', 'Tansy', 'Corvo', 'Ivo', 'Zell', 'Brannock',
+  'Petra', 'Hask', 'Orrin', 'Sorrel', 'Tamsin', 'Vane', 'Wick', 'Yarrow', 'Ember', 'Glint', 'Harrow', 'Isla', 'Jory', 'Knell'];
+
+function poly(pts, x, y, a, s) {
+  const c = Math.cos(a), sn = Math.sin(a);
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => {
+    const X = x + (px * c - py * sn) * s, Y = y + (px * sn + py * c) * s;
+    i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
+  });
+  ctx.closePath();
+}
+function glowStroke(color, glow, width) { // a neon line: wide soft pass, then the bright core
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = glow; ctx.lineWidth = width * 3.2; ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+}
+function drawShip(hull, team, x, y, a, s, opts = {}) {
+  const T = TEAM[team];
+  if (opts.thrust) { // engine flames
+    for (const [ex, ey] of ENGINES[hull]) {
+      const len = (opts.burn ? 1.6 : 0.9) * (0.75 + 0.25 * Math.sin(opts.t * 50 + ey * 9));
+      poly([[ex, ey + 0.16], [ex - len, ey], [ex, ey - 0.16]], x, y, a, s);
+      glowStroke(opts.burn ? '#ffffff' : T.main, T.glow, 1.4);
+    }
+  }
+  poly(SHAPES[hull], x, y, a, s);
+  ctx.fillStyle = 'rgba(4,8,20,0.85)'; ctx.fill();
+  glowStroke(opts.flash ? '#ffffff' : T.main, opts.flash ? 'rgba(255,255,255,0.5)' : T.glow, opts.thin ? 1.4 : 2);
+  // cockpit stripe, so the nose reads at a glance
+  poly([[0.55, 0], [0.05, 0.16], [0.05, -0.16]], x, y, a, s);
+  ctx.fillStyle = T.main; ctx.fill();
+  if (opts.you) { // your ship wears a thin white chevron behind it
+    poly([[-1.6, 0.5], [-1.35, 0], [-1.6, -0.5]], x, y, a, s);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+  }
+}
+function drawAsteroid(r, x, y, scale) {
+  ctx.beginPath();
+  r.shape.forEach(([ang, k], i) => {
+    const X = x + Math.cos(ang + r.spin) * r.r * k * scale, Y = y + Math.sin(ang + r.spin) * r.r * k * scale;
+    i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = '#0b0e18'; ctx.fill();
+  ctx.strokeStyle = '#5d6684'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  // surface cracks: short jagged lines across the rock
+  for (const [cx, cy, cr] of r.craters) {
+    const L = cr * r.r * scale * 2.2, X0 = x + cx * r.r * scale, Y0 = y + cy * r.r * scale, a0 = r.spin + cx * 5;
+    ctx.beginPath();
+    ctx.moveTo(X0 - Math.cos(a0) * L, Y0 - Math.sin(a0) * L);
+    ctx.lineTo(X0 + Math.cos(a0 + 0.9) * L * 0.3, Y0 + Math.sin(a0 + 0.9) * L * 0.3);
+    ctx.lineTo(X0 + Math.cos(a0 - 0.2) * L, Y0 + Math.sin(a0 - 0.2) * L);
+    ctx.strokeStyle = '#3a4260'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+}
+function drawBeacon(b, x, y, scale, t) {
+  const R = tune.beacon_radius * scale;
+  const owner = b.owner, col = owner < 0 ? NEUTRAL : TEAM[owner].main;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + b.phase);
+  // capture ring: dashed outer ring that fills with the holder's colour
+  ctx.setLineDash([14 * scale, 10 * scale]);
+  ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2);
+  ctx.strokeStyle = owner < 0 ? 'rgba(154,164,196,0.35)' : TEAM[owner].glow; ctx.lineWidth = 3; ctx.stroke();
+  ctx.setLineDash([]);
+  if (b.progress !== 0) {
+    const team = b.progress > 0 ? 0 : 1;
+    ctx.beginPath(); ctx.arc(x, y, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.abs(b.progress));
+    ctx.strokeStyle = TEAM[team].main; ctx.lineWidth = 5; ctx.stroke();
+  }
+  // the beacon itself: a spinning diamond core in a hexagon frame
+  const hex = [];
+  for (let i = 0; i < 6; i++) hex.push([Math.cos(i * Math.PI / 3), Math.sin(i * Math.PI / 3)]);
+  poly(hex, x, y, t * 0.4 + b.phase, 30 * scale);
+  ctx.fillStyle = 'rgba(4,8,20,0.9)'; ctx.fill();
+  glowStroke(col, owner < 0 ? 'rgba(154,164,196,0.25)' : TEAM[owner].glow, 2);
+  poly([[1, 0], [0, 0.6], [-1, 0], [0, -0.6]], x, y, -t * 1.3, (14 + 5 * pulse) * scale);
+  ctx.fillStyle = col; ctx.fill();
+  text(b.label, x, y - R - 16 * scale, Math.max(14, 20 * scale), col, 'center', 'bold');
+}
+function drawMine(m, x, y, scale, t) {
+  const T = TEAM[m.team], s = 11 * scale, live = m.age >= tune.mine_arm;
+  const star = [];
+  for (let i = 0; i < 8; i++) { const k = i % 2 ? 0.45 : 1; star.push([Math.cos(i * Math.PI / 4) * k, Math.sin(i * Math.PI / 4) * k]); }
+  poly(star, x, y, t * 1.5, s);
+  ctx.fillStyle = 'rgba(4,8,20,0.9)'; ctx.fill();
+  glowStroke(live && Math.sin(t * 10) > 0 ? '#ffffff' : T.main, T.glow, 1.6);
+}
+function drawShot(b, x, y, scale) {
+  const T = TEAM[b.team], sp = Math.hypot(b.vx, b.vy) || 1;
+  const len = (b.kind === 'rico' ? 26 : b.kind === 'scatter' ? 12 : 18) * scale;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - b.vx / sp * len, y - b.vy / sp * len);
+  glowStroke(b.kind === 'rico' ? '#ffffff' : T.main, T.glow, b.kind === 'rico' ? 3 : 2.2);
+  if (b.kind === 'rico') { poly([[1, 0], [0, 1], [-1, 0], [0, -1]], x, y, 0, 4 * scale); ctx.fillStyle = T.main; ctx.fill(); }
+}
+
+// ---- World helpers ---------------------------------------------------------------------
+const WS = () => tune.world_size;
+function wd(a, b) { const s = WS(); return ((b - a + s * 1.5) % s + s) % s - s / 2; } // shortest wrapped delta a->b
+function wrap(v) { const s = WS(); return ((v % s) + s) % s; }
+function dist(a, b) { return Math.hypot(wd(a.x, b.x), wd(a.y, b.y)); }
+function angDiff(a, b) { return Math.atan2(Math.sin(b - a), Math.cos(b - a)); }
+function hullStat(h, k) { return tune[h + '_' + k]; }
+
+// ---- The zone ----------------------------------------------------------------------------
+let scene, state;
+function makeAsteroids() {
+  const s = WS(), out = [];
+  const keepClear = [[s / 4, s / 2, 420], [s * 3 / 4, s / 2, 420], [s / 2, s / 2, 300], [0, s / 2, 300], [s / 2, 0, 300]];
+  let tries = 0;
+  while (out.length < tune.asteroids && tries++ < 2000) {
+    const r = 45 + rng() * 85, x = rng() * (s / 2 - 60) + 30, y = rng() * s;
+    const p = { x, y };
+    if (keepClear.some(([cx, cy, cr]) => dist(p, { x: cx, y: cy }) < cr + r)) continue;
+    if (out.some(o => dist(p, o) < o.r + r + 90)) continue;
+    const n = 9 + Math.floor(rng() * 4), shape = [];
+    for (let i = 0; i < n; i++) shape.push([i / n * Math.PI * 2, 0.8 + rng() * 0.3]);
+    const craters = [];
+    for (let i = 0; i < 2; i++) craters.push([(rng() - 0.5) * 0.9, (rng() - 0.5) * 0.9, 0.12 + rng() * 0.12]);
+    const spin = rng() * 6.28;
+    out.push({ x, y, r, shape, craters, spin });
+    // its mirror across the middle, so both fleets start equal
+    out.push({ x: s - x, y, r, shape: shape.map(([a, k]) => [Math.PI - a, k]), craters: craters.map(([cx, cy, cr]) => [-cx, cy, cr]), spin: -spin });
+  }
+  return out;
+}
+function makeBeacons() {
+  const s = WS(), d = tune.beacon_drift;
+  return [
+    { label: 'Beacon North', x: s / 2, y: 0, vx: 0, vy: 0, dir: [1, 0] },
+    { label: 'Beacon Core', x: s / 2, y: s / 2, vx: 0, vy: 0, dir: [0, 1] },
+    { label: 'Beacon Rim', x: 0, y: s / 2, vx: 0, vy: 0, dir: [0, -1] },
+  ].map((b, i) => ({ ...b, vx: b.dir[0] * d, vy: b.dir[1] * d, owner: -1, progress: 0, phase: i * 2.1, home: { x: b.x, y: b.y } }));
+}
+function gate(team) { const s = WS(); return { x: team === 0 ? s / 4 : s * 3 / 4, y: s / 2 }; }
+function newShip(team, isPlayer, name, idx) {
+  return {
+    team, isPlayer, name, idx, hull: 'lancer', weapon: 'bolt', nextHull: 'lancer', nextWeapon: 'bolt',
+    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, mineCool: 0,
+    thrusting: false, burning: false, flash: 0, flashTeam: 0, kills: 0, deaths: 0, lastHitBy: null,
+    ai: { think: 0, aimA: 0, wantThrust: false, wantFire: false, wantBurn: false, wantRev: false, target: null, home: idx % 3, wobble: 0 },
+  };
+}
+function launch(sh, head = 0) {
+  const g = gate(sh.team);
+  sh.hull = sh.nextHull; sh.weapon = sh.nextWeapon;
+  const spread = (sh.idx % 5 - 2) * 46, row = Math.floor(sh.idx / 5) * 46;
+  sh.x = wrap(g.x + (sh.team ? row : -row)); sh.y = wrap(g.y + spread);
+  sh.a = sh.team === 0 ? 0 : Math.PI;
+  sh.vx = Math.cos(sh.a) * 120; sh.vy = Math.sin(sh.a) * 120;
+  if (head > 0 && !sh.isPlayer) { // bots start part-way out, so the zone is already busy
+    const b = state.beacons[sh.ai.home];
+    sh.x = wrap(sh.x + wd(sh.x, b.x) * head + (rng() - 0.5) * 200);
+    sh.y = wrap(sh.y + wd(sh.y, b.y) * head + (rng() - 0.5) * 200);
+    sh.a = Math.atan2(wd(sh.y, b.y), wd(sh.x, b.x));
+    sh.vx = Math.cos(sh.a) * 160; sh.vy = Math.sin(sh.a) * 160;
+  }
+  sh.energy = hullStat(sh.hull, 'energy'); sh.alive = true; sh.cool = 0.3; sh.flash = 0;
+}
+function reset() {
+  seed = Number(params.get('seed')) || CONFIG.seed;
+  state = {
+    t: 0, score: 0, gained: '', round: 1, roundT: 0, scores: [0, 0], roundOver: 0, winner: -1, roundsWon: [0, 0],
+    asteroids: [], beacons: [], ships: [], shots: [], mines: [], sparks: [], feed: [], hint: 0, hintT: 0,
+    thrustTime: 0, turned: false, shake: 0, cam: { x: 0, y: 0 }, banner: null,
+  };
+  state.asteroids = makeAsteroids();
+  state.beacons = makeBeacons();
+  const names = BOT_NAMES.slice();
+  for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
+  const n = tune.fleet_size;
+  for (let team = 0; team < 2; team++) for (let i = 0; i < n; i++) {
+    const isPlayer = team === 0 && i === 0;
+    const sh = newShip(team, isPlayer, isPlayer ? 'You' : 'BOT ' + (names.pop() || 'Unit' + i), i);
+    if (!isPlayer) { sh.nextHull = HULLS[Math.floor(rng() * 3)]; sh.nextWeapon = WEAPONS[Math.floor(rng() * 3)]; }
+    state.ships.push(sh);
+  }
+  startRound(true);
+}
+function startRound(first) {
+  state.scores = [0, 0]; state.roundT = 0; state.roundOver = 0; state.winner = -1;
+  state.beacons = makeBeacons(); state.shots = []; state.mines = [];
+  for (const sh of state.ships) { launch(sh, sh.isPlayer ? 0 : 0.55 + rng() * 0.25); sh.respawn = 0; }
+  state.banner = { text: first ? 'Round 1: take the beacons' : `Round ${state.round}: go`, t: 3 };
+}
+const player = () => state.ships[0];
+
+// ---- Simulation ----------------------------------------------------------------------------
+function controlsFor(sh) {
+  if (sh.isPlayer) return {
+    left: held('ArrowLeft', 'KeyA'), right: held('ArrowRight', 'KeyD'), thrust: held('ArrowUp', 'KeyW'),
+    rev: held('ArrowDown', 'KeyS'), fire: held('Space'), burn: held('ShiftLeft', 'ShiftRight'), mine: pressed('KeyE'),
+  };
+  const ai = sh.ai;
+  const err = angDiff(sh.a, ai.aimA);
+  return {
+    left: err < -0.04, right: err > 0.04, thrust: ai.wantThrust, rev: ai.wantRev, burn: ai.wantBurn,
+    fire: ai.wantFire && Math.abs(err) < tune.bot_fire_angle, mine: ai.wantMine,
+  };
+}
+function weaponStat(w, k) { return tune[w + '_' + k]; }
+function fire(sh) {
+  const w = sh.weapon, cost = weaponStat(w, 'cost');
+  if (sh.cool > 0 || sh.energy <= cost + 1) return;
+  sh.energy -= cost; sh.cool = weaponStat(w, 'interval');
+  const sp = weaponStat(w, 'speed'), r = HULL_RADIUS[sh.hull];
+  const angles = w === 'scatter' ? [-tune.scatter_spread, 0, tune.scatter_spread] : [0];
+  for (const da of angles) {
+    const a = sh.a + da;
+    state.shots.push({
+      team: sh.team, owner: sh, kind: w, x: wrap(sh.x + Math.cos(a) * r * 1.6), y: wrap(sh.y + Math.sin(a) * r * 1.6),
+      vx: sh.vx + Math.cos(a) * sp, vy: sh.vy + Math.sin(a) * sp, life: weaponStat(w, 'life'),
+      dmg: weaponStat(w, 'damage'), bounces: w === 'rico' ? tune.rico_bounces : 0,
+    });
+  }
+  if (sh.isPlayer || dist(sh, player()) < 700) (w === 'bolt' ? sfx.shoot : sfx.heavy)();
+}
+function dropMine(sh) {
+  const mine = state.mines.filter(m => m.owner === sh).length;
+  if (sh.mineCool > 0 || mine >= tune.mine_max || sh.energy <= tune.mine_cost + 1) return;
+  sh.energy -= tune.mine_cost; sh.mineCool = tune.mine_cooldown;
+  const r = HULL_RADIUS[sh.hull];
+  state.mines.push({ team: sh.team, owner: sh, x: wrap(sh.x - Math.cos(sh.a) * r * 2), y: wrap(sh.y - Math.sin(sh.a) * r * 2), age: 0 });
+  if (sh.isPlayer) sfx.mine();
+}
+function damage(target, amount, by) {
+  if (!target.alive) return;
+  target.energy -= amount; target.flash = 0.12; target.flashTeam = by ? by.team : 0; target.lastHitBy = by;
+  if (target.isPlayer) { state.shake = Math.min(10, state.shake + amount / 40); sfx.hit(); }
+  if (target.energy <= 0) destroy(target, by);
+}
+function burst(x, y, team, n, speed) {
+  for (let i = 0; i < n; i++) {
+    const a = rng() * Math.PI * 2, s = speed * (0.3 + rng() * 0.7);
+    state.sparks.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + rng() * 0.6, team });
+  }
+}
+function destroy(sh, by) {
+  sh.alive = false; sh.respawn = tune.respawn_time; sh.deaths++;
+  burst(sh.x, sh.y, sh.team, 26, 260);
+  if (dist(sh, player()) < 900) sfx.boom();
+  let line;
+  if (by && by.team !== sh.team) {
+    by.kills++;
+    if (!state.roundOver) state.scores[by.team] += tune.kill_points;
+    line = { a: by.name, at: by.team, b: sh.name, bt: sh.team };
+    if (by.isPlayer) { sfx.kill(); events.push({ type: 'kill' }); }
+  } else line = { a: sh.name, at: sh.team, b: 'the rocks', bt: -1 };
+  state.feed.unshift({ ...line, t: 5 }); state.feed.length = Math.min(state.feed.length, 5);
+  if (sh.isPlayer) { events.push({ type: 'death' }); }
+  if (!sh.isPlayer) { // bots answer what is out there: a new loadout each life
+    sh.nextHull = HULLS[Math.floor(rng() * 3)]; sh.nextWeapon = WEAPONS[Math.floor(rng() * 3)];
+  }
+}
+function collideRocks(o, r, onHit) { // pushes o out of any asteroid and reflects its velocity
+  for (const a of state.asteroids) {
+    const dx = wd(a.x, o.x), dy = wd(a.y, o.y), d = Math.hypot(dx, dy), min = a.r * 0.92 + r;
+    if (d < min && d > 0.001) {
+      const nx = dx / d, ny = dy / d, vn = o.vx * nx + o.vy * ny;
+      o.x = wrap(a.x + nx * min); o.y = wrap(a.y + ny * min);
+      if (vn < 0) {
+        if (onHit && onHit() === false) return true;
+        const k = tune.bounce;
+        o.vx -= (1 + k) * vn * nx; o.vy -= (1 + k) * vn * ny;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+function updateShip(sh, dt) {
+  if (!sh.alive) {
+    sh.respawn -= dt;
+    if (sh.respawn <= 0 && !state.roundOver) launch(sh);
+    return;
+  }
+  const c = controlsFor(sh), h = sh.hull;
+  const turn = hullStat(h, 'turn');
+  if (c.left) sh.a -= turn * dt;
+  if (c.right) sh.a += turn * dt;
+  if (sh.isPlayer && (c.left || c.right)) state.turned = true;
+  const canBurn = c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
+  sh.burning = canBurn;
+  let acc = hullStat(h, 'thrust') * (canBurn ? tune.burn_thrust : 1);
+  sh.thrusting = c.thrust || c.rev;
+  if (c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
+  if (c.rev) { sh.vx -= Math.cos(sh.a) * acc * 0.7 * dt; sh.vy -= Math.sin(sh.a) * acc * 0.7 * dt; }
+  if (sh.isPlayer && c.thrust) state.thrustTime += dt;
+  // tiny drag: ships drift; speed over the hull's cap bleeds off, so afterburn speed fades after the burn
+  sh.vx *= 1 - tune.drag * dt; sh.vy *= 1 - tune.drag * dt;
+  const cap = hullStat(h, 'speed') * (canBurn ? tune.burn_speed : 1), sp = Math.hypot(sh.vx, sh.vy);
+  if (sp > cap) { const k = Math.max(cap / sp, 1 - tune.overspeed_bleed * dt); sh.vx *= k; sh.vy *= k; }
+  sh.x = wrap(sh.x + sh.vx * dt); sh.y = wrap(sh.y + sh.vy * dt);
+  collideRocks(sh, HULL_RADIUS[h] * 0.8);
+  // energy: afterburn drains it, otherwise it refills
+  if (canBurn) sh.energy -= tune.burn_drain * dt;
+  else sh.energy = Math.min(hullStat(h, 'energy'), sh.energy + hullStat(h, 'regen') * dt);
+  sh.cool -= dt; sh.mineCool -= dt; sh.flash -= dt;
+  if (c.fire) fire(sh);
+  if (c.mine) dropMine(sh);
+}
+function think(sh, dt) { // a bot's decisions, taken after a human-like delay
+  const ai = sh.ai;
+  ai.think -= dt;
+  if (!sh.alive) return;
+  // between decisions the bot keeps flying on its last plan, but its aim keeps tracking the target
+  const ramp = Math.min(1, state.roundT / tune.bot_ramp_time);
+  const aimErr = tune.bot_aim_error + (tune.bot_aim_error_late - tune.bot_aim_error) * ramp;
+  if (ai.target && ai.target.alive) {
+    const tg = ai.target, sp = weaponStat(sh.weapon, 'speed');
+    const dx = wd(sh.x, tg.x), dy = wd(sh.y, tg.y), d = Math.hypot(dx, dy), tt = d / sp;
+    const lx = dx + (tg.vx - sh.vx) * tt, ly = dy + (tg.vy - sh.vy) * tt;
+    ai.aimA = Math.atan2(ly, lx) + ai.wobble;
+  }
+  if (ai.think > 0) return;
+  ai.think = tune.bot_reaction * (0.8 + rng() * 0.4);
+  ai.wobble = (rng() - 0.5) * 2 * aimErr;
+  const maxE = hullStat(sh.hull, 'energy'), low = sh.energy < maxE * tune.bot_retreat_energy;
+  // nearest enemy in range
+  let foe = null, fd = tune.bot_engage_range;
+  for (const o of state.ships) if (o.alive && o.team !== sh.team) { const d = dist(sh, o); if (d < fd) { fd = d; foe = o; } }
+  // which beacon to work on
+  let goal = state.beacons[ai.home];
+  const grouped = sh.team === 1 && state.roundT > tune.group_time && (sh.idx % 10) / 10 < tune.group_share;
+  if (grouped) goal = state.beacons[state.groupTarget] || goal;
+  else if (goal.owner === sh.team && Math.abs(goal.progress) >= 1) {
+    // home is safe: help the nearest beacon that is not ours
+    let best = null, bd = Infinity;
+    for (const b of state.beacons) if (b.owner !== sh.team) { const d = dist(sh, b); if (d < bd) { bd = d; best = b; } }
+    if (best && rng() < 0.6) goal = best;
+  }
+  ai.wantMine = false; ai.wantRev = false;
+  if (foe && !low) {
+    ai.target = foe; ai.wantFire = true;
+    ai.wantThrust = fd > 360; ai.wantBurn = fd > 560 && sh.energy > maxE * 0.7;
+    ai.wantRev = fd < 170;
+    if (fd < 260 && rng() < 0.08) ai.wantMine = true;
+  } else {
+    ai.target = null; ai.wantFire = false;
+    let tx = wd(sh.x, goal.x), ty = wd(sh.y, goal.y);
+    if (low && foe) { tx = -wd(sh.x, foe.x); ty = -wd(sh.y, foe.y); ai.wantMine = rng() < 0.1; } // run, and drop a mine behind
+    const d = Math.hypot(tx, ty), sp = Math.hypot(sh.vx, sh.vy);
+    // inside the ring and moving: brake by turning against the drift and thrusting
+    if (!low && d < tune.beacon_radius * 0.7 && sp > 90) {
+      ai.aimA = Math.atan2(-sh.vy, -sh.vx); ai.wantThrust = true; ai.wantBurn = false;
+    } else {
+      // steer for the goal, correcting sideways drift
+      const want = Math.atan2(ty, tx), vAlong = (sh.vx * tx + sh.vy * ty) / (d || 1);
+      const side = angDiff(want, Math.atan2(sh.vy, sh.vx));
+      ai.aimA = want - (sp > 80 ? side * 0.5 : 0);
+      ai.wantThrust = d > tune.beacon_radius * 0.4 && (vAlong < hullStat(sh.hull, 'speed') * 0.85 || Math.abs(side) > 0.4);
+      ai.wantBurn = low && !!foe;
+      if (d < tune.beacon_radius * 1.8 && vAlong > 220) { ai.aimA = Math.atan2(-sh.vy, -sh.vx); ai.wantThrust = true; }
+    }
+    // rocks ahead: turn off the line
+    const sp2 = Math.max(sp, 1);
+    for (const a of state.asteroids) {
+      const ax = wd(sh.x, a.x), ay = wd(sh.y, a.y), along = (ax * sh.vx + ay * sh.vy) / sp2;
+      if (along > 0 && along < 260 + a.r) {
+        const perp = (ax * sh.vy - ay * sh.vx) / sp2;
+        if (Math.abs(perp) < a.r + 40) { ai.aimA = Math.atan2(sh.vy, sh.vx) + (perp > 0 ? -1.2 : 1.2); ai.wantThrust = true; break; }
+      }
+    }
+  }
+}
+function updateBeacons(dt) {
+  const s = WS();
+  for (const b of state.beacons) {
+    b.x = wrap(b.x + b.vx * dt); b.y = wrap(b.y + b.vy * dt);
+    // beacons bounce off rocks, so the drift wanders through the zone
+    collideRocks(b, 30);
+    const sp = Math.hypot(b.vx, b.vy) || 1, d = tune.beacon_drift;
+    b.vx = b.vx / sp * d; b.vy = b.vy / sp * d;
+    if (state.roundOver) continue;
+    const count = [0, 0];
+    for (const sh of state.ships) if (sh.alive && dist(sh, b) < tune.beacon_radius) count[sh.team]++;
+    const net = count[0] - count[1];
+    if (net !== 0) {
+      const before = b.owner;
+      b.progress = Math.max(-1, Math.min(1, b.progress + Math.sign(net) * Math.min(3, Math.abs(net)) * tune.capture_rate * dt));
+      if (b.progress >= 1) b.owner = 0; else if (b.progress <= -1) b.owner = 1;
+      else if ((b.owner === 0 && b.progress < 0) || (b.owner === 1 && b.progress > 0)) b.owner = -1;
+      if (before !== b.owner) {
+        if (b.owner === 0) { sfx.capture(); events.push({ type: 'capture' }); state.banner = { text: `${b.label} is ours`, t: 2.2, team: 0 }; }
+        else if (before === 0) { sfx.lost(); state.banner = { text: `${b.label} lost`, t: 2.2, team: 1 }; }
+      }
+    }
+    if (b.owner >= 0) state.scores[b.owner] += tune.beacon_points * dt;
+  }
+  // the amber group goes for the cyan-held beacon nearest the amber fleet
+  if (state.roundT > tune.group_time) {
+    let best = -1, bd = Infinity;
+    const amber = state.ships.filter(x => x.team === 1 && x.alive);
+    const cx = amber.length ? amber[0] : gate(1);
+    state.beacons.forEach((b, i) => { const d = dist(cx, b) + (b.owner === 0 ? 0 : 1500) + (b.owner === 1 ? 1500 : 0); if (d < bd) { bd = d; best = i; } });
+    state.groupTarget = best;
+    if (!state.grouped) { state.grouped = true; state.banner = { text: 'The amber fleet is moving as one', t: 3, team: 1 }; }
+  }
+}
+function updateShots(dt) {
+  for (const b of state.shots) {
+    b.life -= dt;
+    b.x = wrap(b.x + b.vx * dt); b.y = wrap(b.y + b.vy * dt);
+    collideRocks(b, 2, () => {
+      if (b.bounces > 0) { b.bounces--; return true; }
+      burst(b.x, b.y, b.team, 3, 80); b.life = 0; return false;
+    });
+    if (b.life <= 0) continue;
+    for (const sh of state.ships) {
+      if (!sh.alive || sh.team === b.team) continue;
+      if (Math.hypot(wd(b.x, sh.x), wd(b.y, sh.y)) < HULL_RADIUS[sh.hull] + 3) {
+        b.life = 0; burst(b.x, b.y, b.team, 4, 120); damage(sh, b.dmg, b.owner); break;
+      }
+    }
+  }
+  state.shots = state.shots.filter(b => b.life > 0);
+  for (const m of state.mines) {
+    m.age += dt;
+    if (m.age < tune.mine_arm) continue;
+    let boom = m.age > tune.mine_life;
+    for (const sh of state.ships) if (sh.alive && sh.team !== m.team && dist(sh, m) < tune.mine_trigger + HULL_RADIUS[sh.hull]) boom = true;
+    if (boom) {
+      m.dead = true; burst(m.x, m.y, m.team, 30, 340);
+      if (dist(m, player()) < 900) sfx.boom();
+      for (const sh of state.ships) if (sh.alive && sh.team !== m.team) {
+        const d = dist(sh, m);
+        if (d < tune.mine_radius) damage(sh, tune.mine_damage * (1 - 0.5 * d / tune.mine_radius), m.owner);
+      }
+    }
+  }
+  state.mines = state.mines.filter(m => !m.dead);
+  for (const p of state.sparks) { p.life -= dt; p.x = wrap(p.x + p.vx * dt); p.y = wrap(p.y + p.vy * dt); p.vx *= 0.96; p.vy *= 0.96; }
+  state.sparks = state.sparks.filter(p => p.life > 0);
+}
+function updateHints(dt) {
+  const p = player();
+  state.hintT += dt;
+  if (state.hint === 0 && state.thrustTime > 1.2 && state.turned) { state.hint = 1; state.hintT = 0; }
+  if (state.hint === 1 && (state.beacons.some(b => dist(p, b) < 450) || state.hintT > 25)) { state.hint = 2; state.hintT = 0; }
+  if (state.hint === 2 && (state.beacons.some(b => b.owner === 0 && dist(p, b) < tune.beacon_radius) || state.hintT > 35)) { state.hint = 3; state.hintT = 0; }
+  if (state.hint === 3 && state.hintT > 9) { state.hint = 4; }
+}
+function updatePlay(dt) {
+  state.t += dt;
+  if (!state.roundOver) state.roundT += dt;
+  for (const sh of state.ships) if (!sh.isPlayer) think(sh, dt);
+  for (const sh of state.ships) updateShip(sh, dt);
+  updateShots(dt);
+  updateBeacons(dt);
+  updateHints(dt);
+  // the loadout you pick while waiting to respawn
+  const p = player();
+  if (!p.alive) {
+    ['Digit1', 'Digit2', 'Digit3'].forEach((k, i) => { if (pressed(k)) p.nextHull = HULLS[i]; });
+    ['KeyZ', 'KeyX', 'KeyC'].forEach((k, i) => { if (pressed(k)) p.nextWeapon = WEAPONS[i]; });
+  }
+  for (const f of state.feed) f.t -= dt;
+  state.feed = state.feed.filter(f => f.t > 0);
+  if (state.banner) { state.banner.t -= dt; if (state.banner.t <= 0) state.banner = null; }
+  state.shake = Math.max(0, state.shake - dt * 30);
+  state.score = Math.floor(state.scores[0]);
+  // the round: first fleet to the target wins; the zone shows it, then starts the next in place
+  if (!state.roundOver) {
+    for (let t = 0; t < 2; t++) if (state.scores[t] >= tune.target_score) {
+      state.roundOver = tune.round_break; state.winner = t; state.roundsWon[t]++;
+      state.gained = t === 0 ? 'Cyan fleet wins the round' : 'Amber fleet takes the round';
+      events.push({ type: 'round', winner: t });
+      (t === 0 ? sfx.capture : sfx.lost)();
+      break;
+    }
+  } else {
+    state.roundOver -= dt;
+    if (state.roundOver <= 0 || pressed('Enter')) { state.round++; state.grouped = false; startRound(false); }
+  }
+  // camera follows you, leaning a little toward where you drift
+  const f = p.alive ? p : { x: p.x, y: p.y, vx: 0, vy: 0 };
+  const lx = wrap(f.x + f.vx * 0.35), ly = wrap(f.y + f.vy * 0.35);
+  state.cam.x = wrap(state.cam.x + wd(state.cam.x, lx) * Math.min(1, dt * 4));
+  state.cam.y = wrap(state.cam.y + wd(state.cam.y, ly) * Math.min(1, dt * 4));
+}
+
+// ---- Drawing the zone -------------------------------------------------------------------
+let stars = null;
+function makeStars() { // background only: fixed pattern, not gameplay, so it does not touch rng()
+  let s = 7; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  stars = [];
+  for (let layer = 0; layer < 3; layer++) for (let i = 0; i < 90; i++) stars.push({ x: r() * 1600, y: r() * 1600, layer, b: 0.3 + r() * 0.7 });
+}
+function drawStars(cx, cy) {
+  if (!stars) makeStars();
+  for (const st of stars) {
+    const par = [0.15, 0.3, 0.5][st.layer];
+    const x = ((st.x - cx * par) % 1600 + 1600) % 1600 - 160, y = ((st.y - cy * par) % 1600 + 1600) % 1600 - 440;
+    if (x < 0 || x > W || y < 0 || y > H) continue;
+    ctx.fillStyle = `rgba(${170 + st.layer * 30},${190 + st.layer * 20},255,${st.b * (0.35 + st.layer * 0.25)})`;
+    const sz = st.layer + 1;
+    ctx.fillRect(x, y, sz, sz);
+  }
+}
+function toScreen(x, y) {
+  const z = tune.zoom, sx = state.shake ? (Math.sin(state.t * 90) * state.shake) : 0;
+  return [W / 2 + wd(state.cam.x, x) * z + sx, H / 2 + wd(state.cam.y, y) * z];
+}
+function onScreen(X, Y, m) { return X > -m && X < W + m && Y > -m && Y < H + m; }
+function drawZone() {
+  clear('#03040b');
+  // faint nebula wash, deep blue and violet
+  const g = ctx.createRadialGradient(W * 0.3, H * 0.2, 50, W * 0.3, H * 0.2, W * 0.9);
+  g.addColorStop(0, 'rgba(40,30,90,0.25)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  drawStars(state.cam.x, state.cam.y);
+  const z = tune.zoom, t = state.t;
+  // fleet gates: bracket shapes where each fleet launches
+  for (let team = 0; team < 2; team++) {
+    const g2 = gate(team), [X, Y] = toScreen(g2.x, g2.y);
+    if (!onScreen(X, Y, 300)) continue;
+    const dir = team === 0 ? 1 : -1;
+    for (const sy of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(X - dir * 60 * z, Y + sy * 150 * z); ctx.lineTo(X - dir * 110 * z, Y + sy * 150 * z);
+      ctx.lineTo(X - dir * 110 * z, Y + sy * 40 * z);
+      glowStroke(TEAM[team].dim, TEAM[team].glow, 3);
+    }
+    text(team === 0 ? 'Cyan gate' : 'Amber gate', X - dir * 85 * z, Y - 175 * z, 16, TEAM[team].main);
+  }
+  for (const b of state.beacons) { const [X, Y] = toScreen(b.x, b.y); if (onScreen(X, Y, 250)) drawBeacon(b, X, Y, z, t); }
+  for (const a of state.asteroids) { const [X, Y] = toScreen(a.x, a.y); if (onScreen(X, Y, a.r * z + 10)) drawAsteroid(a, X, Y, z); }
+  for (const m of state.mines) { const [X, Y] = toScreen(m.x, m.y); if (onScreen(X, Y, 30)) drawMine(m, X, Y, z, t); }
+  for (const b of state.shots) { const [X, Y] = toScreen(b.x, b.y); if (onScreen(X, Y, 30)) drawShot(b, X, Y, z); }
+  for (const p of state.sparks) {
+    const [X, Y] = toScreen(p.x, p.y); if (!onScreen(X, Y, 10)) continue;
+    ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X - p.vx * 0.04 * z, Y - p.vy * 0.04 * z);
+    ctx.strokeStyle = p.life > 0.5 ? '#ffffff' : TEAM[p.team].main; ctx.lineWidth = 2; ctx.stroke();
+  }
+  const me = player();
+  // the nearest enemy gets a name tag, so you know it is a bot and who you are fighting
+  let tag = null, td = 700;
+  for (const sh of state.ships) if (sh.alive && sh.team === 1) { const d = dist(me, sh); if (d < td) { td = d; tag = sh; } }
+  for (const sh of state.ships) {
+    if (!sh.alive) continue;
+    const [X, Y] = toScreen(sh.x, sh.y);
+    if (!onScreen(X, Y, 60)) continue;
+    const s = HULL_RADIUS[sh.hull] * z * 1.25;
+    ctx.save();
+    if (sh.flash > 0) { ctx.globalAlpha = 1; }
+    drawShip(sh.hull, sh.team, X, Y, sh.a, s, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.isPlayer, flash: sh.flash > 0 });
+    ctx.restore();
+    // energy tick under any ship that is not full
+    const maxE = hullStat(sh.hull, 'energy');
+    if (!sh.isPlayer && sh.energy < maxE * 0.98) {
+      const w = 34 * z;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(X - w / 2, Y + s * 1.6, w, 3);
+      ctx.fillStyle = TEAM[sh.team].main; ctx.fillRect(X - w / 2, Y + s * 1.6, w * Math.max(0, sh.energy / maxE), 3);
+    }
+    if (sh === tag) text(`${sh.name} · ${HULL_NAME[sh.hull]}`, X, Y - s * 1.9 - 6, 14, TEAM[1].main);
+  }
+}
+function drawBeaconArrows() { // off-screen beacons point in from the screen edge
+  for (const b of state.beacons) {
+    const [X, Y] = toScreen(b.x, b.y);
+    if (onScreen(X, Y, -40)) continue;
+    const a = Math.atan2(Y - H / 2, X - W / 2);
+    const k = Math.min((W / 2 - 40) / Math.abs(Math.cos(a) || 1e-6), (H / 2 - 110) / Math.abs(Math.sin(a) || 1e-6));
+    const ax = W / 2 + Math.cos(a) * k, ay = H / 2 + 20 + Math.sin(a) * k;
+    const col = b.owner < 0 ? NEUTRAL : TEAM[b.owner].main;
+    poly([[1, 0], [-0.7, 0.7], [-0.3, 0], [-0.7, -0.7]], ax, ay, a, 16);
+    ctx.fillStyle = col; ctx.fill();
+  }
+}
+function drawHUD() {
+  const me = player();
+  // score bar: both fleets racing to the target
+  const bw = 520, bx = W / 2 - bw / 2, by = 18;
+  ctx.fillStyle = 'rgba(3,4,11,0.75)'; ctx.fillRect(10, 8, 220, 52); ctx.fillRect(bx - 110, by - 6, bw + 260, 84);
+  if (state.feed.length) ctx.fillRect(W - 300, 10, 290, state.feed.length * 24 + 6);
+  for (let t = 0; t < 2; t++) {
+    const y = by + t * 22, f = Math.min(1, state.scores[t] / tune.target_score);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(bx, y, bw, 12);
+    ctx.fillStyle = TEAM[t].main; ctx.fillRect(bx, y, bw * f, 12);
+    text(`${t === 0 ? 'Cyan' : 'Amber'} ${Math.floor(state.scores[t])}`, bx - 12, y + 6, 16, TEAM[t].main, 'right', 'bold');
+  }
+  text(`to ${tune.target_score}  ·  round ${state.round}`, bx + bw + 12, by + 17, 15, '#aab4d4', 'left');
+  // beacon holdings under the bar
+  state.beacons.forEach((b, i) => {
+    const x = W / 2 - 60 + i * 60, y = by + 62, col = b.owner < 0 ? NEUTRAL : TEAM[b.owner].main;
+    poly([[1, 0], [0, 0.6], [-1, 0], [0, -0.6]], x, y, 0, 12); ctx.fillStyle = col; ctx.fill();
+  });
+  // fleet line: you plus bots, named as bots
+  const n = tune.fleet_size;
+  text(`You + ${n - 1} bots  vs  ${n} bots`, 20, 24, 15, '#aab4d4', 'left');
+  text(`Your kills ${me.kills}  ·  deaths ${me.deaths}`, 20, 46, 15, '#aab4d4', 'left');
+  // kill feed: who hit who
+  state.feed.forEach((f, i) => {
+    const y = 26 + i * 24, x = W - 20;
+    ctx.globalAlpha = Math.min(1, f.t);
+    ctx.font = `15px ${FONT}`;
+    const wb = ctx.measureText(f.b).width, mid = f.bt < 0 ? ' crashed into ' : ' downed ', wm = ctx.measureText(mid).width;
+    text(f.b, x, y, 15, f.bt < 0 ? '#aab4d4' : TEAM[f.bt].main, 'right');
+    text(mid, x - wb, y, 15, '#d8deef', 'right');
+    text(f.a, x - wb - wm, y, 15, TEAM[f.at].main, 'right', 'bold');
+    ctx.globalAlpha = 1;
+  });
+  // energy bar: your shield and your ammo
+  const ew = 360, ex = W / 2 - ew / 2, ey = H - 40;
+  const maxE = hullStat(me.hull, 'energy'), ef = me.alive ? Math.max(0, me.energy / maxE) : 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(ex, ey, ew, 14);
+  ctx.fillStyle = ef < 0.3 ? '#ff5a6a' : TEAM[0].main; ctx.fillRect(ex, ey, ew * ef, 14);
+  ctx.strokeStyle = TEAM[0].dim; ctx.lineWidth = 1; ctx.strokeRect(ex, ey, ew, 14);
+  text(`Energy ${Math.max(0, Math.round(me.energy))}`, ex - 12, ey + 7, 15, ef < 0.3 ? '#ff5a6a' : TEAM[0].main, 'right', 'bold');
+  text(`${HULL_NAME[me.hull]} · ${WEAPON_NAME[me.weapon]}`, ex + ew + 12, ey + 7, 15, '#aab4d4', 'left');
+  drawMinimap();
+}
+function drawMinimap() {
+  const size = 170, mx = W - size - 16, my = H - size - 16, k = size / WS();
+  ctx.fillStyle = 'rgba(6,10,24,0.82)'; ctx.fillRect(mx, my, size, size);
+  ctx.strokeStyle = '#2a3354'; ctx.lineWidth = 1; ctx.strokeRect(mx, my, size, size);
+  for (const a of state.asteroids) { ctx.fillStyle = '#2f3757'; ctx.fillRect(mx + a.x * k - 2, my + a.y * k - 2, 4, 4); }
+  for (const b of state.beacons) {
+    ctx.beginPath(); ctx.arc(mx + b.x * k, my + b.y * k, tune.beacon_radius * k + 2, 0, Math.PI * 2);
+    ctx.strokeStyle = b.owner < 0 ? NEUTRAL : TEAM[b.owner].main; ctx.lineWidth = 2; ctx.stroke();
+  }
+  for (const sh of state.ships) {
+    if (!sh.alive || sh.isPlayer) continue;
+    poly([[1, 0], [-0.7, 0.7], [-0.7, -0.7]], mx + sh.x * k, my + sh.y * k, sh.a, 3.2);
+    ctx.fillStyle = TEAM[sh.team].main; ctx.fill();
+  }
+  const me = player();
+  if (me.alive) { poly([[1, 0], [-0.7, 0.75], [-0.7, -0.75]], mx + me.x * k, my + me.y * k, me.a, 5.5); ctx.fillStyle = '#ffffff'; ctx.fill(); }
+  // the view's frame
+  const vw = W / tune.zoom * k, vh = H / tune.zoom * k;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.strokeRect(mx + state.cam.x * k - vw / 2, my + state.cam.y * k - vh / 2, vw, vh);
+}
+function drawHint() {
+  const lines = [
+    'Left / Right to turn, Up to thrust. You drift: turn around and thrust to slow down.',
+    'Follow the arrows to a beacon. Space fires, and every shot spends energy.',
+    'Sit inside the ring to take it. Beacons you hold score for your fleet while they drift.',
+    'Shift afterburns, E drops a mine behind you. Lead your shots: aim where they will be.',
+  ];
+  const s = lines[state.hint];
+  if (!s || state.roundOver) return;
+  ctx.font = `17px ${FONT}`;
+  const w = ctx.measureText(s).width + 36;
+  ctx.fillStyle = 'rgba(6,10,24,0.85)'; ctx.fillRect(W / 2 - w / 2, H - 112, w, 36);
+  ctx.strokeStyle = TEAM[0].dim; ctx.strokeRect(W / 2 - w / 2, H - 112, w, 36);
+  text(s, W / 2, H - 94, 17, '#e6f6ff');
+}
+function drawRespawn() {
+  const me = player();
+  if (me.alive || state.roundOver) return;
+  ctx.fillStyle = 'rgba(3,4,11,0.72)'; ctx.fillRect(0, 0, W, H);
+  text('Destroyed', W / 2, 150, 44, TEAM[0].main, 'center', 'bold');
+  const by = me.lastHitBy;
+  text(by ? `by ${by.name} flying a ${HULL_NAME[by.hull]} with ${WEAPON_NAME[by.weapon]}` : 'by the rocks', W / 2, 196, 18, '#d8deef');
+  text(`Relaunch in ${Math.max(0, me.respawn).toFixed(1)} s  ·  pick your loadout`, W / 2, 236, 20, '#aab4d4');
+  HULLS.forEach((h, i) => {
+    const x = W / 2 - 300 + i * 300, y = 340, sel = me.nextHull === h;
+    ctx.strokeStyle = sel ? TEAM[0].main : '#2a3354'; ctx.lineWidth = sel ? 2 : 1; ctx.strokeRect(x - 120, y - 70, 240, 140);
+    drawShip(h, 0, x, y - 14, -Math.PI / 2, HULL_RADIUS[h] * 1.9, { t: state.t });
+    text(`${i + 1}  ${HULL_NAME[h]}`, x, y + 40, 18, sel ? '#ffffff' : '#aab4d4', 'center', 'bold');
+    text(HULL_ROLE[h], x, y + 60, 14, '#8590b4');
+  });
+  WEAPONS.forEach((w, i) => {
+    const x = W / 2 - 300 + i * 300, y = 500, sel = me.nextWeapon === w;
+    ctx.strokeStyle = sel ? TEAM[0].main : '#2a3354'; ctx.lineWidth = sel ? 2 : 1; ctx.strokeRect(x - 120, y - 46, 240, 92);
+    // a little picture of the shot
+    const demo = { team: 0, kind: w, vx: 1, vy: 0 };
+    if (w === 'scatter') [-14, 0, 14].forEach(dy => drawShot(demo, x + 30, y - 18 + dy, 1.4));
+    else drawShot(demo, x + 30, y - 18, 1.4);
+    text(`${'ZXC'[i]}  ${WEAPON_NAME[w]}`, x, y + 10, 18, sel ? '#ffffff' : '#aab4d4', 'center', 'bold');
+    text(WEAPON_ROLE[w], x, y + 30, 14, '#8590b4');
+  });
+}
+function drawBanner() {
+  if (state.roundOver) {
+    ctx.fillStyle = 'rgba(3,4,11,0.7)'; ctx.fillRect(0, H / 2 - 110, W, 220);
+    const T = TEAM[state.winner];
+    text(state.gained, W / 2, H / 2 - 50, 48, T.main, 'center', 'bold');
+    text(`Rounds won: Cyan ${state.roundsWon[0]}  ·  Amber ${state.roundsWon[1]}`, W / 2, H / 2 + 6, 20, '#d8deef');
+    text(`Next round in ${Math.ceil(state.roundOver)} s, right here (Enter to skip)`, W / 2, H / 2 + 46, 18, '#aab4d4');
+    return;
+  }
+  if (!state.banner) return;
+  const b = state.banner;
+  ctx.globalAlpha = Math.min(1, b.t * 2);
+  text(b.text, W / 2, 128, 28, b.team === undefined ? '#ffffff' : TEAM[b.team].main, 'center', 'bold');
+  ctx.globalAlpha = 1;
+}
+
+// ---- Scenes -------------------------------------------------------------------------------
+const scenes = {
+  figures: {
+    update(dt) { state.t += dt; },
+    draw() {
+      clear('#03040b'); drawStars(0, 0);
+      text('Beacon Wars: every figure', W / 2, 40, 26, '#ffffff', 'center', 'bold');
+      HULLS.forEach((h, i) => {
+        for (let team = 0; team < 2; team++) {
+          const x = 160 + i * 190 + team * 0, y = 150 + team * 150;
+          drawShip(h, team, x, y, -Math.PI / 2, HULL_RADIUS[h] * 2.2, { t: state.t });
+          text(`${HULL_NAME[h]} (${team ? 'amber' : 'cyan'})`, x, y + (h === 'bulwark' ? 70 : 60), 15, TEAM[team].main);
+        }
+      });
+      drawShip('lancer', 0, 760, 150, -Math.PI / 2, HULL_RADIUS.lancer * 2.2, { you: true, t: state.t });
+      text('You (white chevron)', 760, 216, 15, '#ffffff');
+      const b = { owner: 0, progress: 1, phase: 0, label: 'Beacon (held)' };
+      drawBeacon(b, 1050, 210, 0.55, state.t);
+      drawBeacon({ owner: -1, progress: 0, phase: 1, label: 'Beacon (neutral)' }, 1050, 470, 0.55, state.t);
+      const ast = { r: 60, shape: [], craters: [[-0.2, -0.1, 0.18], [0.25, 0.2, 0.14]], spin: 0 };
+      let s2 = 3; for (let i = 0; i < 11; i++) { s2 = (s2 * 16807) % 2147483647; ast.shape.push([i / 11 * Math.PI * 2, 0.8 + (s2 / 2147483647) * 0.3]); }
+      drawAsteroid(ast, 160, 490, 1); text('Asteroid', 160, 570, 15, '#aab4d4');
+      drawMine({ team: 1, age: 2 }, 350, 490, 2, state.t); text('Mine', 350, 570, 15, TEAM[1].main);
+      ['bolt', 'rico', 'scatter'].forEach((k, i) => {
+        const demo = { team: i === 2 ? 1 : 0, kind: k, vx: 1, vy: 0 };
+        drawShot(demo, 540 + i * 140, 490, 2); text(WEAPON_NAME[k], 520 + i * 140, 570, 15, TEAM[demo.team].main);
+      });
+    },
+  },
+  title: {
+    update() { if (pressed('Enter') || pressed('Space')) { reset(); scene = 'play'; } },
+    draw() {
+      clear('#03040b'); drawStars(clock.now() * 30, 0);
+      const t = clock.now();
+      drawShip('lancer', 0, W / 2 - 330, 150, 0.2 + Math.sin(t) * 0.1, 30, { thrust: true, t });
+      drawShip('bulwark', 1, W / 2 + 330, 150, Math.PI - 0.2 + Math.sin(t) * 0.1, 28, { thrust: true, t });
+      drawBeacon({ owner: -1, progress: 0.4 + 0.3 * Math.sin(t), phase: 0, label: '' }, W / 2, 160, 0.42, t);
+      text(TITLE, W / 2, 268, 72, '#ffffff', 'center', 'bold');
+      text('Two fleets. Three drifting beacons. One wrap-around asteroid zone.', W / 2, 324, 20, '#aab4d4');
+      CONTROLS.forEach((c, i) => text(c, W / 2, 400 + i * 34, 18, '#d8deef'));
+      text('Every other ship is a bot, named as a bot: online play comes later.', W / 2, 560, 16, '#8590b4');
+      text('Enter to launch', W / 2, H - 80, 30, TEAM[0].main, 'center', 'bold');
+    },
+  },
+  play: {
+    update(dt) {
+      if (pressed('KeyP') || pressed('Escape')) { scene = 'pause'; return; }
+      updatePlay(dt);
+    },
+    draw() {
+      drawZone(); drawBeaconArrows(); drawHUD(); drawHint(); drawBanner(); drawRespawn();
+    },
+  },
+  pause: {
+    update() { if (pressed('KeyP') || pressed('Escape')) scene = 'play'; },
+    draw() {
+      scenes.play.draw(); ctx.fillStyle = 'rgba(3,4,11,0.6)'; ctx.fillRect(0, 0, W, H);
+      text('Paused', W / 2, H / 2 - 20, 48, '#fff', 'center', 'bold');
+      text('P to carry on  ·  M to mute', W / 2, H / 2 + 30, 20, '#aab4d4');
+    },
+  },
+};
+
+// ---- Loop -----------------------------------------------------------------------------------
+function step() {
+  if (pressed('KeyM')) { setMuted(!muted); hit.delete('KeyM'); }
+  scenes[scene].update(STEP); hit.clear();
+}
+let last, acc = 0, ALPHA = 1;
+function tick() {
+  const now = clock.now();
+  acc += Math.min(now - last, 0.25); last = now;
+  while (acc >= STEP) { step(); acc -= STEP; }
+  ALPHA = acc / STEP;
+  drawFrame();
+}
+function drawFrame() { scenes[scene].draw(); if (muted) text('Muted', W - 50, H - 200, 14, '#8590b4'); }
+function frame() { tick(); requestAnimationFrame(frame); }
+function timer() { if (document.visibilityState === 'visible' && clock.now() - last > 0.1) tick(); }
+
+window.game = {
+  get scene() { return scene; },
+  get state() { return state; },
+  press(code) { hit.add(code); },
+  hold(code, on) { on ? down.add(code) : down.delete(code); },
+  get events() { return events; },
+  step(n = 1, draw = true, alpha = 1) {
+    for (let i = 0; i < n; i++) step();
+    if (draw) { ALPHA = alpha; drawFrame(); }
+  },
+};
+
+reset();
+scene = params.get('scene') || 'title';
+last = clock.now();
+if (params.get('manual') === '1') drawFrame();
+else { requestAnimationFrame(frame); setInterval(timer, 50); }
+</script>
+</body>
+</html>
