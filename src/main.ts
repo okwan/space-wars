@@ -2,7 +2,7 @@
 // (pure, deterministic, server-ready); the look is in render/art.ts; what the checks drive is
 // in hook.ts. Implements design/game-brief.md.
 
-import { Application, BlurFilter, Container, Graphics, RenderTexture, Sprite, Text, type TextStyleFontWeight } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics, RenderTexture, RendererType, Sprite, Text, type TextStyleFontWeight } from 'pixi.js';
 import config from '../data/config.json';
 import { Sound } from './audio';
 import { readPad, type PadState } from './gamepad';
@@ -319,6 +319,9 @@ async function start(): Promise<void> {
   const sharp = new Sprite(lit), bloom = new Sprite(lit);
   bloom.filters = [new BlurFilter({ strength: 10, quality: 3, resolution: 0.5 })];
   bloom.blendMode = 'add';
+  // the Canvas 2D fallback (no WebGL) skips filters, so an unblurred copy would only double every colour
+  const canBloom = app.renderer.type !== RendererType.CANVAS;
+  bloom.visible = canBloom;
   app.stage.addChild(sharp, bloom, hud, textLayer, top, topText);
   const L = new Labels(textLayer), T = new Labels(topText);
 

@@ -11,7 +11,8 @@ Claude (recommendation); Oscar decides
 
 ## Summary
 Ship on Steam by wrapping the Vite build in Electron, with `steamworks.js` for achievements,
-overlay and auth when they are needed. Not built yet.
+overlay and auth when they are needed. A removable prototype of the wrapper is in `desktop/`
+(2026-11-16); no Steam account or store work has been done.
 
 ## Context
 CLAUDE.md requires a desktop wrapper decided by ADR before release. The game is a WebGL

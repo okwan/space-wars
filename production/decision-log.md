@@ -23,5 +23,7 @@ recommended default for every open question. Each one is easy to change; say whi
 | 16 | Beacons: 8-arc ring, team glyph core, flat team wash; arcs alternate and the wash splits while a held beacon is drained | Art bible §2–§4 beacon states | `src/render/art.ts` |
 | 17 | Round won: shockwave rings from the winner's beacons, bloom up 60% for the winner and down for the loser (capped under Reduce flashing) | Art bible §2 round states | `src/main.ts` |
 | 18 | Shots get a pale hot core for their first 0.07 s; ships leave a short fading drift trail | Art bible §4, §5 | `src/render/art.ts` |
+| 19 | Built the Electron wrapper as a removable `desktop/` folder (own package.json, Electron 45.2.1); ADR-0002 stays Proposed; no Steam account steps | Coordinator asked for it on recommended defaults; delete the folder to undo | `desktop/README.md` |
+| 20 | Bloom is switched off when the browser has no WebGL (Canvas 2D fallback skips filters) | Otherwise colours doubled | `src/main.ts` |
 
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.
