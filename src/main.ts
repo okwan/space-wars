@@ -15,7 +15,7 @@ import { HULL_RADIUS, HULLS, WEAPONS, type GameEvent, type Ship, type ShipInput,
 import { gate, newWorld } from './game/world';
 import { clock, install, manual, params, seedFrom } from './hook';
 import {
-  arrow, blip, dashedRing, look, diamond, drawAsteroid, drawBeacon, drawMine, drawShip, drawShot,
+  arrow, blip, dashedRing, drawTrail, look, diamond, drawAsteroid, drawBeacon, drawMine, drawShip, drawShot,
   HULL_NAME, HULL_ROLE, INK, ownerColor, ownerCss, TEAM, WEAPON_NAME, WEAPON_ROLE,
 } from './render/art';
 
@@ -356,11 +356,23 @@ async function start(): Promise<void> {
       const [X, Y] = toScreen(b.x, b.y);
       if (!on(X, Y, tune.beacon_radius * s * 2.3)) continue;
       drawBeacon(g, b, X, Y, tune.beacon_radius * s, s, t);
-      L.put(b.label, X, Y - tune.beacon_radius * s - 16, 18, ownerCss(b.owner), 'center', true);
+      L.put(b.label, X, Y - tune.beacon_radius * s - 30, 18, ownerCss(b.owner), 'center', true);
+    }
+    if (world.roundOver > 0 && world.winner !== -1) { // round won: a shockwave rolls out of each of the winner's beacons
+      const e = tune.round_break - world.roundOver, col = TEAM[world.winner].main;
+      for (const b of world.beacons) {
+        if (b.owner !== world.winner) continue;
+        const [X, Y] = toScreen(b.x, b.y);
+        for (let k = 0; k < 3; k++) {
+          const ek = e - k * 0.7; if (ek <= 0 || ek > 2.4) continue;
+          const R = tune.beacon_radius * s * (1 + ek * 3), al = 1 - ek / 2.4;
+          if (on(X, Y, R + 20)) g.circle(X, Y, R).stroke({ width: 6 * al + 1, color: col, alpha: al * 0.8 });
+        }
+      }
     }
     for (const a of world.asteroids) { const [X, Y] = toScreen(a.x, a.y); if (on(X, Y, a.r * s + 10)) drawAsteroid(g, a, X, Y, s); }
     for (const m of world.mines) { const [X, Y] = toScreen(m.x, m.y); if (on(X, Y, 30)) drawMine(g, m, m.age >= tune.mine_arm, X, Y, s, t); }
-    for (const b of world.shots) { const [X, Y] = toScreen(b.x, b.y); if (on(X, Y, 30)) drawShot(g, b, X, Y, s); }
+    for (const b of world.shots) { const [X, Y] = toScreen(b.x, b.y); if (on(X, Y, 30)) drawShot(g, b, X, Y, s, tune[`${b.kind}_life`] - b.life < 0.07); }
     for (const p of view.sparks) {
       const [X, Y] = toScreen(p.x, p.y); if (!on(X, Y, 10)) continue;
       g.moveTo(X, Y).lineTo(X - p.vx * 0.04 * s, Y - p.vy * 0.04 * s).stroke({ width: 2, color: p.life > 0.5 ? 0xffffff : TEAM[p.team].main });
@@ -373,6 +385,7 @@ async function start(): Promise<void> {
       const [X, Y] = toScreen(sh.x, sh.y);
       if (!on(X, Y, 60)) continue;
       const r = HULL_RADIUS[sh.hull] * s * 1.25;
+      drawTrail(g, sh.team, X, Y, sh.vx, sh.vy, s);
       const maxE = tune[`${sh.hull}_energy`];
       drawShip(g, sh.hull, sh.team, X, Y, sh.a, r, { thrust: sh.thrusting, burn: sh.burning, t, you: sh.id === ME, flash: sh.flash > 0, low: sh.energy < maxE * tune.low_energy_warn });
       if (sh.id !== ME && sh.energy < maxE * 0.98) {
@@ -611,7 +624,13 @@ async function start(): Promise<void> {
   }
 
   function draw(): void {
-    look.calm = settings.calm; bloom.alpha = settings.calm ? 0.45 : 0.9;
+    look.calm = settings.calm;
+    let glowK = 1; // Round won is the only state with full bloom; Round lost drains it (art bible §2)
+    if ((scene === 'play' || scene === 'pause') && world.roundOver > 0 && world.winner !== -1) {
+      const e = Math.min(1, (tune.round_break - world.roundOver) / 0.6);
+      glowK = world.winner === me().team ? 1 + 0.6 * e : 1 - 0.55 * e;
+    }
+    bloom.alpha = (settings.calm ? 0.45 : 0.9) * (settings.calm ? Math.min(1, glowK) : glowK);
     g.clear(); hud.clear(); top.clear(); L.begin(); T.begin();
     if (scene === 'title') drawTitle();
     else if (scene === 'settings') drawSettings();

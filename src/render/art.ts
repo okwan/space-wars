@@ -167,11 +167,35 @@ export function drawMine(g: Graphics, m: Pick<Mine, 'team'>, live: boolean, x: n
   if (live && look.calm) g.circle(x, y, 3 * scale).fill(TEAM[m.team].main); // armed, shown without blinking
 }
 
-export function drawShot(g: Graphics, b: Pick<Shot, 'team' | 'kind' | 'vx' | 'vy'>, x: number, y: number, scale: number): void {
+/** The hot core of a team colour: a pale tint for muzzle flashes and impacts, a few frames only (art bible §4). */
+export function hotTint(color: number): number {
+  const mix = (c: number) => Math.round(c + (255 - c) * 0.65);
+  return (mix((color >> 16) & 255) << 16) | (mix((color >> 8) & 255) << 8) | mix(color & 255);
+}
+
+/** A shot: a streak in team colour, with a hot pale core while `hot` (its first few frames). */
+export function drawShot(g: Graphics, b: Pick<Shot, 'team' | 'kind' | 'vx' | 'vy'>, x: number, y: number, scale: number, hot = false): void {
   const sp = Math.hypot(b.vx, b.vy) || 1, col = TEAM[b.team].main;
   const len = (b.kind === 'rico' ? 26 : b.kind === 'scatter' ? 12 : 18) * scale;
-  glow(g, () => g.moveTo(x, y).lineTo(x - (b.vx / sp) * len, y - (b.vy / sp) * len), b.kind === 'rico' ? 0xffffff : col, b.kind === 'rico' ? 3 : 2.2);
+  const ux = b.vx / sp, uy = b.vy / sp;
+  glow(g, () => g.moveTo(x, y).lineTo(x - ux * len, y - uy * len), b.kind === 'rico' ? 0xffffff : col, b.kind === 'rico' ? 3 : 2.2);
+  if (hot) {
+    g.moveTo(x, y).lineTo(x - ux * len * 0.6, y - uy * len * 0.6).stroke({ width: 4, color: hotTint(col), cap: 'round' });
+    if (!look.calm) g.circle(x, y, 4 * scale).fill({ color: hotTint(col), alpha: 0.8 });
+  }
   if (b.kind === 'rico') g.poly(pts([[1, 0], [0, 1], [-1, 0], [0, -1]], x, y, 0, 4 * scale), true).fill(col);
+}
+
+/** A short drift trail along a ship's velocity, fading toward the tail: motion told by light (art bible §5). */
+export function drawTrail(g: Graphics, team: Team, x: number, y: number, vx: number, vy: number, scale: number): void {
+  const sp = Math.hypot(vx, vy);
+  if (sp < 40) return;
+  const len = Math.min(140, sp * 0.16) * scale, ux = vx / sp, uy = vy / sp, n = 5;
+  for (let i = 0; i < n; i++) {
+    const a = len * (i / n), b2 = len * ((i + 1) / n);
+    g.moveTo(x - ux * a, y - uy * a).lineTo(x - ux * b2, y - uy * b2)
+      .stroke({ width: 3.5 - i * 0.5, color: TEAM[team].main, alpha: 0.55 * (1 - i / n) });
+  }
 }
 
 /** A small arrow, for off-screen beacons and the minimap. */

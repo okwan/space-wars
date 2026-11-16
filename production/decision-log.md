@@ -21,5 +21,7 @@ recommended default for every open question. Each one is easy to change; say whi
 | 14 | "Reduce flashing" setting, off by default: no white hit flash, no mine blink, no screen shake, half bloom | Art bible §7 conflict pick | `src/settings.ts` |
 | 15 | Low energy below 30% (`low_energy_warn`): dashed flickering hull, hatched red bar, threshold tick, warning glyph and beep | Never colour alone (art bible §4) | `data/config.json` |
 | 16 | Beacons: 8-arc ring, team glyph core, flat team wash; arcs alternate and the wash splits while a held beacon is drained | Art bible §2–§4 beacon states | `src/render/art.ts` |
+| 17 | Round won: shockwave rings from the winner's beacons, bloom up 60% for the winner and down for the loser (capped under Reduce flashing) | Art bible §2 round states | `src/main.ts` |
+| 18 | Shots get a pale hot core for their first 0.07 s; ships leave a short fading drift trail | Art bible §4, §5 | `src/render/art.ts` |
 
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.
