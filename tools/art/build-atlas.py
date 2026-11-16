@@ -1,4 +1,5 @@
-"""Builds assets/sprites/atlas.png + atlas.json and the nebula from the vendored Kenney art.
+"""Builds assets/sprites/atlas.png + atlas.json and the nebula from the vendored Kenney art
+and our own hero sprites in assets/art/ (drawn by tools/art/hulls.mjs).
 
 Run: python3 tools/art/build-atlas.py  (needs Pillow). Every source is CC0, see
 assets/vendor/kenney/LICENSE.txt and THIRD_PARTY_NOTICES.md. Sprites face up (nose to -y).
@@ -35,21 +36,24 @@ def grey(im):
             px[x, y] = (v, v, round(v * 1.08) if v < 236 else v, a)
     return im
 
+def art(name):
+    """One of our own sprites from assets/art/, cropped to its painted edges."""
+    im = Image.open(os.path.join(ROOT, 'assets', 'art', name)).convert('RGBA')
+    return im.crop(im.getbbox())
+
 def fit(im, m):
     im = im.copy(); im.thumbnail((m, m), Image.LANCZOS); return im
 
 AMBER = 0.105
 sprites = {
-    'ship_dart_0': load(f'{R}/playerShip3_blue.png'), 'ship_dart_1': load(f'{R}/playerShip3_orange.png'),
-    'ship_lancer_0': load(f'{R}/playerShip1_blue.png'), 'ship_lancer_1': load(f'{R}/playerShip1_orange.png'),
-    'ship_bulwark_0': load(f'{R}/Enemies/enemyBlue4.png').rotate(180), 'ship_bulwark_1': load(f'{R}/Enemies/enemyRed4.png').rotate(180),
+    # the hulls and the beacon station are our own art (tools/art/hulls.mjs), cropped to their edges
+    **{f'ship_{h}_{t}': art(f'hull_{h}_{t}.png') for h in ('dart', 'lancer', 'bulwark') for t in (0, 1)},
     'shot_bolt_0': load(f'{R}/Lasers/laserBlue01.png'), 'shot_scatter_0': load(f'{R}/Lasers/laserBlue05.png'),
     'shot_rico_0': load(f'{R}/Lasers/laserBlue08.png'), 'impact_0': load(f'{R}/Lasers/laserBlue09.png'),
     'flame_0': load(f'{R}/Effects/fire01.png'), 'flame_1': load(f'{R}/Effects/fire03.png'), 'flame_burn': load(f'{R}/Effects/fire08.png'),
     'shield': load(f'{R}/Effects/shield1.png'),
     'mine_0': load(f'{R}/ufoBlue.png'), 'mine_1': load(f'{R}/ufoYellow.png'),
-    'beacon_0': load(f'{X}/Station/spaceStation_022.png'), 'beacon_1': load(f'{X}/Station/spaceStation_023.png'),
-    'beacon_n': grey(load(f'{X}/Station/spaceStation_022.png')),
+    'beacon_0': art('station_0.png'), 'beacon_1': art('station_1.png'), 'beacon_n': art('station_n.png'),
     'spark': fit(load(f'{P}/spark_01.png'), 64), 'glint': fit(load(f'{P}/star_06.png'), 64),
     'planet_a': fit(load('Planets/Planets/planet04.png'), 256), 'planet_b': fit(load('Planets/Planets/planet09.png'), 256),
 }

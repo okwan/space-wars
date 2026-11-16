@@ -157,42 +157,6 @@
   licence: {id: CC0-1.0}
   date: 2026-11-16
   ships: false
-- path: assets/vendor/kenney/Space Shooter Extension/Sprites/Station/spaceStation_022.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Extension", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Extension/Sprites/Station/spaceStation_023.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Extension", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/playerShip1_blue.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/playerShip1_orange.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/playerShip3_blue.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/playerShip3_orange.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
 - path: assets/vendor/kenney/Space Shooter Remastered/ufoBlue.png
   origin: cc0
   source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
@@ -230,18 +194,6 @@
   date: 2026-11-16
   ships: false
 - path: assets/vendor/kenney/Space Shooter Remastered/Effects/shield1.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/Enemies/enemyBlue4.png
-  origin: cc0
-  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
-  licence: {id: CC0-1.0}
-  date: 2026-11-16
-  ships: false
-- path: assets/vendor/kenney/Space Shooter Remastered/Enemies/enemyRed4.png
   origin: cc0
   source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
   licence: {id: CC0-1.0}
@@ -310,7 +262,7 @@
 - path: assets/sprites/atlas.png
   origin: cc0
   tool: "tools/art/build-atlas.py"
-  source: {vendor: Kenney, product: "atlas of the vendored Kenney sprites; amber shots hue-shifted, neutral beacon desaturated", url: "https://kenney.nl/assets"}
+  source: {vendor: Kenney, product: "atlas of the vendored Kenney sprites (amber shots hue-shifted) plus our own hulls and station", url: "https://kenney.nl/assets"}
   licence: {id: CC0-1.0}
   date: 2026-11-16
   ships: true
@@ -335,3 +287,60 @@
   licence: {id: CC0-1.0}
   date: 2026-11-16
   ships: true
+
+# Our own hero art: the three hulls in both fleets' paint and the beacon station, drawn as SVG
+# in code and rendered to PNG. No third-party material.
+- path: assets/art/hull_bulwark_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_bulwark_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_dart_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_dart_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_lancer_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_lancer_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_n.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false

@@ -35,9 +35,9 @@ The game's own code, design, art, sound and other content added in this reposito
 
 ## Kenney game art (CC0)
 
-The game's sprites, backgrounds and HUD panels are by Kenney (https://kenney.nl), from the packs
+The game's shots, rocks, effects, mines, backgrounds and HUD panels are by Kenney (https://kenney.nl), from the packs
 Space Shooter Redux, Space Shooter Extension, Explosion Pack, Particle Pack, Planets and UI Pack -
 Sci-fi. They are released under Creative Commons Zero (CC0 1.0): free for personal, educational and
 commercial use, credit not required. We credit Kenney anyway. The license text is kept at
-`assets/vendor/kenney/LICENSE.txt`; every file is listed in `assets/provenance.yaml`. The amber
-shots, the grey beacon and the nebula are our edits of those sprites (`tools/art/build-atlas.py`).
+`assets/vendor/kenney/LICENSE.txt`; every file is listed in `assets/provenance.yaml`. The ship hulls and the beacon station are our own art
+(`tools/art/hulls.mjs`), not Kenney's. The amber shots and the nebula are our edits of those sprites (`tools/art/build-atlas.py`).

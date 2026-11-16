@@ -30,5 +30,6 @@ recommended default for every open question. Each one is easy to change; say whi
 | 23 | Performance budgets set: 60 fps, 16.67 ms, 200 draw calls, 512 MB | Art bible §8 flagged none; CPU frame cost measured at ~5 ms | `project.yaml` |
 | 24 | Hints show once per browser (remembered), plus a one-time low-energy hint | Returning players are not re-taught | `src/settings.ts` |
 | 25 | Art v2: Kenney CC0 sprites (Space Shooter Redux/Extension, Explosion, Particle, Planets, UI Sci-fi) replace the vector look; blue ships = cyan fleet, orange = amber; bloom on the lit layer only | Oscar: the code-drawn art "looks really bad"; CC0 is safe for Steam; stock art, so plan custom hero assets before release | `design/art/art-bible.md` (Revision 2), `THIRD_PARTY_NOTICES.md` |
+| 26 | Custom hero art: the three hulls (both fleets) and the beacon station are our own SVG drawings, replacing the Kenney ships and station | Oscar asked for custom art; the hero assets are what makes the game recognisable | `tools/art/hulls.mjs`, `assets/art/` |
 
 Not done: hosting for public zones, accounts, Steam integration, music, binary wire format.

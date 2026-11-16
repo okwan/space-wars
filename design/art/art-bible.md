@@ -19,18 +19,20 @@ section wins; everything not listed here still stands.
 - **Identity, updated.** Clean, bright, painted sci-fi sprites on a deep starfield with a cool
   nebula. Light still marks what matters (shots, flames, beacon rings and explosions sit on the lit
   layer and get bloom), but figures are now solid painted objects, not outlines.
-- **Ships (§3, §5).** Team is the paint: cyan fleet ships are blue-bodied, amber fleet ships
-  orange-bodied. Class is the silhouette: Dart is the narrow delta (Redux playerShip3), Lancer the
-  winged fighter (playerShip1), Bulwark the heavy armoured block (Redux enemy4, turned to face
-  forward). Colour-blind backup kept: a small team pip behind each hull (cyan triangle, amber
+- **Ships (§3, §5), our own art.** Drawn for this game in `tools/art/hulls.mjs`: white
+  metal hulls with fleet paint (blue for cyan, orange for amber), dark ink outline, glass canopy,
+  glowing nozzles. Class is the silhouette: Dart is a slim arrowhead with forward canards and one
+  engine; Lancer a long lance nose, swept wings, wingtip pods and twin engines; Bulwark a broad
+  armoured block with shoulder plates and three engines. Colour-blind backup kept: a small team pip behind each hull (cyan triangle, amber
   diamond), drawn over the sprite. Your ship keeps the white chevron.
 - **Motion (§1.2).** Engine flames are sprites (blue or orange, white-hot on afterburner); drift
   trails and shot tails stay as short fading lines.
 - **Shots and effects.** Laser sprites (amber versions hue-shifted from the blue originals), a
   glint on firing, impact stars on hits, a 9-frame painted explosion on kills and mines, a shield
   shimmer when hit. Sparks stay as streaks (a star-shaped spark read as a background star).
-- **Beacons (§3, §6).** A satellite station sprite turns at the centre: blue panels when cyan
-  holds it, yellow when amber holds it, grey when neutral. The 8-arc ring, capture fill, team glyph
+- **Beacons (§3, §6), our own art.** A station turns at the centre: a hexagonal core in a lit
+  ring with four panel arms, painted blue when cyan holds it, orange when amber holds it, grey
+  when neutral. The 8-arc ring, capture fill, team glyph
   and ground wash stay as drawn.
 - **Rocks.** Grey meteor sprites, slightly darkened, sized to each rock's collision radius.
 - **Background (§6).** A tiled starfield (darkened to the void colour), a tinted nebula at a
@@ -42,8 +44,10 @@ section wins; everything not listed here still stands.
   built by `tools/art/build-atlas.py` from the vendored originals in `assets/vendor/`). Every
   sprite faces up. Any new sprite needs a commercial-use licence recorded in
   `assets/provenance.yaml` and `THIRD_PARTY_NOTICES.md`. Bloom now runs on the lit layer only.
-- **Known limits.** These are stock packs other games also use; for the Steam release, plan a
-  custom pass on the hero assets (the three hulls, the beacon station) so the game has its own look.
+- **Known limits.** Shots, rocks, explosions, backgrounds and HUD panels are still stock Kenney
+  art that other games use; the hulls and the station are ours. Next custom candidates: rocks,
+  explosions and the HUD frame. Store and capsule art needs a human illustrator or a licensed image
+  tool.
 
 ## 1. Visual Identity Statement
 

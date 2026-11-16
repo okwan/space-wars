@@ -114,10 +114,10 @@ export class Backdrop {
 
 // ---- What each figure looks like ----------------------------------------------------------
 
-/** The sprite frame for a hull in a fleet's colours: cyan ships are blue, amber ships orange. */
+/** The sprite frame for a hull in a fleet's colours (our own art): cyan ships are blue, amber ships orange. */
 export const shipFrame = (hull: Hull, team: Team): string => `ship_${hull}_${team}`;
 /** Sprite size per hull, as a multiple of the hull's collision radius. */
-export const SHIP_SIZE: Record<Hull, number> = { dart: 3.0, lancer: 2.9, bulwark: 2.35 };
+export const SHIP_SIZE: Record<Hull, number> = { dart: 3.8, lancer: 3.7, bulwark: 3.0 };
 /** Where the engines sit, in units of the hull radius, nose to +x. */
 const ENGINES: Record<Hull, [number, number][]> = { dart: [[-1.2, 0]], lancer: [[-1.05, 0.42], [-1.05, -0.42]], bulwark: [[-1.15, 0.55], [-1.15, -0.55]] };
 
@@ -148,7 +148,7 @@ export function rockSprite(S: SpritePool, rock: Asteroid, x: number, y: number, 
 
 /** A beacon's station: a slowly turning satellite in its holder's colours (grey when neutral). */
 export function beaconSprite(S: SpritePool, owner: -1 | Team, x: number, y: number, scale: number, t: number, phase: number): void {
-  S.put(owner === -1 ? 'beacon_n' : `beacon_${owner}`, x, y, t * 0.25 + phase, 230 * scale);
+  S.put(owner === -1 ? 'beacon_n' : `beacon_${owner}`, x, y, t * 0.25 + phase, 190 * scale);
 }
 
 /** A mine: a small saucer in its fleet's colours; an armed one blinks a bright core. */
