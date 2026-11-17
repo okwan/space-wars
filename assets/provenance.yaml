@@ -10,3 +10,345 @@
 #   date: 2026-01-31
 #   ships: true               # false for a file only the build uses
 #   placeholder: true         # until it is replaced, with _ph before the extension; leave the line out otherwise
+
+# Kenney space art, vendored 2026-11-16 from the Kenney CC0 library mirror (github.com/shorepine/kenney,
+# commit 3694c68), originally from kenney.nl. Only the files the game uses are kept.
+- path: assets/vendor/kenney/LICENSE.txt
+  origin: cc0
+  source: {vendor: Kenney, product: "Kenney license text", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney-ui/LICENSE.txt
+  origin: cc0
+  source: {vendor: Kenney, product: "Kenney license text", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney-ui/bar_blue.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney-ui/bar_grey.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney-ui/bar_red.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney-ui/bar_yellow.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney-ui/panel_glass_notches.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney-ui/panel_glass_tab_blade.png
+  origin: cc0
+  source: {vendor: Kenney, product: "UI Pack - Sci-fi", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion00.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion01.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion02.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion03.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion04.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion05.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion06.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion07.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Explosion Pack/Regular explosion/regularExplosion08.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Explosion Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Particle Pack/PNG (Transparent)/smoke_01.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Particle Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Particle Pack/PNG (Transparent)/smoke_04.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Particle Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Particle Pack/PNG (Transparent)/smoke_07.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Particle Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Particle Pack/PNG (Transparent)/spark_01.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Particle Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Particle Pack/PNG (Transparent)/star_06.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Particle Pack", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Planets/Planets/planet04.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Planets", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Planets/Planets/planet09.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Planets", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/ufoBlue.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/ufoYellow.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Backgrounds/black.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Effects/fire01.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Effects/fire03.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Effects/fire08.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Effects/shield1.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Lasers/laserBlue01.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Lasers/laserBlue05.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Lasers/laserBlue08.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Lasers/laserBlue09.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_big1.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_big2.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_big3.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_big4.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_med1.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/vendor/kenney/Space Shooter Remastered/Meteors/meteorGrey_med2.png
+  origin: cc0
+  source: {vendor: Kenney, product: "Space Shooter Redux", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: false
+- path: assets/sprites/atlas.png
+  origin: cc0
+  tool: "tools/art/build-atlas.py"
+  source: {vendor: Kenney, product: "atlas of the vendored Kenney sprites (amber shots hue-shifted) plus our own hulls and station", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/sprites/atlas.json
+  origin: cc0
+  tool: "tools/art/build-atlas.py"
+  source: {vendor: Kenney, product: "frame list for atlas.png", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/sprites/nebula.png
+  origin: cc0
+  tool: "tools/art/build-atlas.py"
+  source: {vendor: Kenney, product: "nebula composed from Kenney Particle Pack smoke, tinted", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+- path: assets/sprites/space.png
+  origin: cc0
+  tool: "tools/art/build-atlas.py"
+  source: {vendor: Kenney, product: "copy of Kenney Space Shooter Redux black.png background tile", url: "https://kenney.nl/assets"}
+  licence: {id: CC0-1.0}
+  date: 2026-11-16
+  ships: true
+
+# Our own hero art: the three hulls in both fleets' paint and the beacon station, drawn as SVG
+# in code and rendered to PNG. No third-party material.
+- path: assets/art/hull_bulwark_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_bulwark_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_dart_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_dart_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_lancer_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/hull_lancer_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_0.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_1.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/station_n.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+- path: assets/art/salvage.png
+  origin: code
+  tool: "tools/art/hulls.mjs (SVG rendered in Chromium)"
+  model: "Claude Opus 5.5"
+  date: 2026-11-16
+  ships: false
+# 2026-11-16: the walled zone. Tile walls, the safe deck and the radar picture are drawn at run time by our own code
+# (src/render/tiles.ts); no files, no third-party art. nebula.png and space.png above are no longer used by the game.

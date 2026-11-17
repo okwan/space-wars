@@ -28,20 +28,37 @@ test('boots to the title screen with no errors @boot', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('a scripted run moves the square, and the same seed repeats it exactly', async ({ page }) => {
+test('a scripted run flies the ship, and the same seed repeats it exactly', async ({ page }) => {
   // ?manual=1 stops the loop, so only step() moves the game: one mechanism, no fake clock.
-  async function run(): Promise<{ scene: string; moved: number; state: unknown }> {
+  async function run(): Promise<{ scene: string; moved: number; snapshot: string }> {
     await open(page, 'manual=1&seed=7');
     return page.evaluate(() => {
       const g = window.game!;
+      type Z = { ships: { x: number; y: number }[] };
       g.press('Enter'); g.step();
-      const x0 = (g.state as { x: number }).x;
-      g.hold('ArrowRight', true); g.step(60); g.hold('ArrowRight', false);
-      return { scene: g.scene, moved: (g.state as { x: number }).x - x0, state: g.state };
+      const s0 = (g.state as Z).ships[0], x0 = s0.x, y0 = s0.y;
+      g.hold('ArrowUp', true); g.hold('Space', true); g.step(90);
+      g.hold('ArrowUp', false); g.hold('Space', false); g.step(60);
+      const s1 = (g.state as Z).ships[0];
+      return { scene: g.scene, moved: Math.hypot(s1.x - x0, s1.y - y0), snapshot: JSON.stringify(g.state) };
     });
   }
   const first = await run();
   expect(first.scene).toBe('play');
-  expect(first.moved).toBeCloseTo(config.speed.value, 6);
+  expect(first.moved).toBeGreaterThan(50); // the safe zone is small: the ship may meet its wall and bounce
   expect(await run()).toEqual(first);
+  void config;
+});
+
+test('pause stops the zone and the figure sheet draws', async ({ page }) => {
+  const errors = await open(page, 'manual=1');
+  const t = await page.evaluate(() => {
+    const g = window.game!; g.press('Enter'); g.step(10); g.press('KeyP'); g.step(1);
+    const before = (g.state as { t: number }).t; g.step(60);
+    return { scene: g.scene, same: (g.state as { t: number }).t === before };
+  });
+  expect(t).toEqual({ scene: 'pause', same: true });
+  await open(page, 'manual=1&scene=figures');
+  expect(await page.evaluate(() => window.game!.scene)).toBe('figures');
+  expect(errors).toEqual([]);
 });

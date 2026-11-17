@@ -1,0 +1,6 @@
+wrap-around asteroid arena	the zone wraps on both axes (wrap() in index.html) with mirrored asteroids drawn as grey outlines	evidence/play.png
+team fleets	two fleets of 10, cyan and amber, score bar per fleet	evidence/play.png
+drifting beacons	three beacons drift and bounce off rocks; held ring fills with the fleet colour	evidence/play.png
+swappable ship loadouts	respawn screen: 1/2/3 hull, Z/X/C weapon	index.html drawRespawn
+open zone, many in one server	thin stand-in: 20 ships, bots named as bots, round restarts in place	evidence/play.png
+physics like the continuum game	drift-and-thrust: fixed turn rate, thrust, tiny drag, speed cap, afterburn, energy as shield and ammo; our own numbers	index.html updateShip

@@ -1,0 +1,26 @@
+{
+  "name": "beacon-wars-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The desktop (Steam) wrapper for Beacon Wars: Electron around the one-file web build. See docs/architecture/adr-0002-steam-desktop-wrapper.md.",
+  "main": "main.cjs",
+  "scripts": {
+    "app": "npm --prefix .. run build:single && node copy-build.cjs",
+    "start": "npm run app && electron .",
+    "pack": "npm run app && electron-builder --dir",
+    "dist": "npm run app && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.1"
+  },
+  "build": {
+    "appId": "com.example.beaconwars",
+    "productName": "Beacon Wars",
+    "files": ["main.cjs", "app/**"],
+    "directories": { "output": "release" },
+    "win": { "target": "dir" },
+    "linux": { "target": "dir" },
+    "mac": { "target": "dir" }
+  }
+}

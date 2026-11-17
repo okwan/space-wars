@@ -1,0 +1,28 @@
+time	2026-11-16 06:25:57
+keep	lines	0	pinned	0
+briefword	a ton of	unlisted
+checklist	L1	unlisted	-	Look: glowing neon vector ships on deep black space; teams in cyan and amber; beacons as slow-pulsing rings that fill with the holder's colour; grey outlined asteroids; faint parallax starfield; every shot leaves a short glow trail. Every figure drawn, no emoji, no plain circles. *(provisional)*	
+checklist	L2	unlisted	-	References: the old zone-based space shooters you played (the drift physics, energy as health, open zones) for feel only, nothing copied; Asteroids (wrap-around space, thrust). *(inferred (strong))*	
+checklist	L3	unlisted	-	View: 2D · Camera: top-down, centred on your ship with slight look-ahead along your velocity; a minimap of the whole zone. *(guessed)*	
+checklist	F1	unlisted	-	Drift-and-thrust flight with real momentum, wrap-around zone edges and bouncing off asteroids	
+checklist	F2	unlisted	-	Energy as shield and ammo: guns, afterburn and mines all spend it	
+checklist	F3	unlisted	-	3 drifting beacons you capture by holding the ring, ticking fleet score	
+checklist	F4	unlisted	-	Two fleets of 10: you plus 9 bots against 10 bots, bots that fly, lead shots, dodge and go for beacons	
+checklist	F5	unlisted	-	Loadout at respawn: 3 hulls (light, medium, heavy) and 3 weapons (rapid bolts, bouncing shot, spread)	
+checklist	F6	unlisted	-	Rounds that end on a score and restart in place; the zone never goes to a menu	
+checklist	F7	unlisted	-	Kill feed naming who hit who, score bar, minimap, energy bar	
+checklist	S1	unlisted	-	teams · in the slice	
+checklist	S2	unlisted	-	an open zone many players share · thin stand-in	
+checklist	S3	unlisted	-	Continuum-like physics · in the slice	
+checklist	S4	unlisted	-	swappable ship loadouts · in the slice *(guessed)*	
+checklist	M1	unlisted	-	You spawn at your fleet's gate already flying; a hint says turn and thrust.	
+checklist	M2	unlisted	-	You overshoot, learn to counter-thrust, and see the nearest beacon on the minimap drifting between asteroids.	
+checklist	M3	unlisted	-	Two bots from each side are already circling it.	
+checklist	M4	unlisted	-	You fire, watch your energy dip and refill, and get a kill by leading the shot.	
+checklist	M5	unlisted	-	You sit inside the ring, it fills cyan, and your team's score starts ticking: the hook lands as the beacon drifts on and the enemy fleet turns to follow it.	
+checklist	M6	unlisted	-	*(guessed)*	
+checklist	C1	unlisted	-	Bots fight properly from the start but miss sometimes and react a beat late.	
+checklist	C2	unlisted	-	From about minute 2 the enemy fleet moves in groups to retake beacons.	
+checklist	C3	unlisted	-	Dying costs a few seconds and gives the enemy a point; a bigger zone fight later means three beacons contested at once.	
+checklist	C4	unlisted	-	*(provisional)*	
+not_assessed	scripted run	the browser stopped without a picture (exit 1)
