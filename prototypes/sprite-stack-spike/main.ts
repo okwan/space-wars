@@ -86,7 +86,11 @@ function updateCamera(dt: number, sh: Ship): CameraState {
     if (tileAt(map, Math.floor(px / TILE), Math.floor(-py / TILE)) === WALL) { dist = Math.max(20, s - 6); break; }
   }
   const scale = Math.exp(cam.logScale) * Math.exp(cam.logDist) / dist; // same picture size when pulled in
-  return { tx, ty, tz, yaw: cam.yaw, pitch: cam.pitch, dist, scale };
+  // straight down and square to the map, move the camera in whole screen pixels: the walls and
+  // stacks then step cleanly instead of their edges crawling between pixels as you fly
+  let sx = tx, sy = ty;
+  if (cam.pitch > 1.5 && Math.abs(angTo(cam.yaw, Math.PI / 2)) < 0.01) { const px = 1 / scale; sx = Math.round(tx / px) * px; sy = Math.round(ty / px) * px; }
+  return { tx: sx, ty: sy, tz, yaw: cam.yaw, pitch: cam.pitch, dist, scale };
 }
 
 // ---- input ------------------------------------------------------------------------------------
@@ -101,6 +105,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyC') view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length];
   if (e.code === 'KeyL') showStack = !showStack;
   if (e.code === 'KeyH') showHud = !showHud;
+  if (e.code === 'KeyI') showStats = !showStats;
   if (e.code === 'KeyO') opt.outline = !opt.outline;
   if (e.code === 'KeyP') opt.palette = !opt.palette;
   if (e.code === 'KeyG') opt.dither = !opt.dither;
@@ -120,8 +125,8 @@ function readInput(): ShipInput {
     burn: held('ShiftLeft', 'ShiftRight'), fire: held('Space'), bomb: held('KeyF', 'KeyB'), mine: held('KeyE'),
   };
 }
-const opt = { outline: true, palette: true, dither: true };
-let showStack = params.has('stack'), showHud = !params.has('nohud');
+const opt = { outline: true, palette: false, dither: false };
+let showStack = params.has('stack'), showHud = !params.has('nohud'), showStats = params.has('debug');
 
 // ---- effects (look only) --------------------------------------------------------------------------
 interface Bit { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; col: number; size: number }
@@ -153,9 +158,9 @@ function effects(): void {
 }
 
 // ---- drawing a frame ----------------------------------------------------------------------------
-const rocks = Array.from({ length: 420 }, (_, i) => ({
-  x: rnd() * world.size, y: -rnd() * world.size, z: -70 - rnd() * 260, m: `rock${i % 5}`,
-  yaw: rnd() * 6.28, spin: (rnd() - 0.5) * 0.4, tilt: rnd() * 6.28,
+const rocks = Array.from({ length: 260 }, (_, i) => ({
+  x: rnd() * world.size, y: -rnd() * world.size, z: -90 - rnd() * 240, m: `rock${i % 5}`,
+  yaw: rnd() * 6.28, spin: (rnd() - 0.5) * 0.12, tilt: rnd() * 6.28,
 }));
 
 function draw(time: number, dt: number): CameraState {
@@ -170,18 +175,18 @@ function draw(time: number, dt: number): CameraState {
   lights.push({ x: centre, y: -centre, z: -70, r: 260, cr: 0.15, cg: 0.5, cb: 0.4, halo: 0 });
   for (let i = 0; i < rocks.length; i++) {
     const r = rocks[i];
-    R.drawModel(models.get(r.m)!, r.x, r.y, r.z, r.yaw + time * r.spin, VOX, 2 + i, r.tilt, time * r.spin * 0.5);
+    R.drawModel(models.get(r.m)!, r.x, r.y, r.z, r.yaw + time * r.spin, VOX, 2 + i, r.tilt);
   }
   // salvage pods: turning, bobbing, glowing violet
   for (const p of world.salvage) {
-    const blink = p.age > tune.salvage_life - 5 && Math.floor(time * 6) % 2 === 0;
+    const blink = p.age > tune.salvage_life - 5 && Math.floor(time * 2) % 2 === 0;
     if (blink) continue;
-    R.drawModel(models.get('pod')!, p.x, -p.y, SHIP_Z + Math.sin(time * 2 + p.id) * 2, time * 0.9 + p.id, 1.6, 500 + (p.id % 400), 0.4, 0.3);
+    R.drawModel(models.get('pod')!, p.x, -p.y, SHIP_Z, time * 0.6 + p.id, 1.6, 500 + (p.id % 400));
     lights.push({ x: p.x, y: -p.y, z: SHIP_Z + 6, r: 60, cr: 0.7, cg: 0.35, cb: 1.2, halo: 10 });
   }
   for (const mn of world.mines) {
     R.drawModel(models.get('mine')!, mn.x, -mn.y, SHIP_Z - 2, time * 0.5, VOX, 900);
-    if (Math.floor(time * 3 + mn.x) % 2 === 0) lights.push({ x: mn.x, y: -mn.y, z: SHIP_Z + 4, r: 40, cr: 1.2, cg: 0.2, cb: 0.15, halo: 6 });
+    if (Math.floor(time + mn.x) % 2 === 0) lights.push({ x: mn.x, y: -mn.y, z: SHIP_Z + 4, r: 40, cr: 1.2, cg: 0.2, cb: 0.15, halo: 6 });
   }
   // ships
   for (const sh of world.ships) {
@@ -191,20 +196,20 @@ function draw(time: number, dt: number): CameraState {
     const rl = (roll.get(sh.id) ?? 0) * 0.85 + Math.max(-0.6, Math.min(0.6, turn * 0.13)) * 0.15;
     roll.set(sh.id, rl);
     const side = sh.id === ME ? 0 : 1, m = models.get(`${sh.hull}:${side}`)!;
-    const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z + Math.sin(time * 2.2 + sh.id) * 0.8;
+    const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z; // no bob: a moving voxel grid shimmers
     R.drawModel(m, x, y, z, yaw, VOX, 1000 + sh.id, rl, 0, sh.flash > 0 ? 0.7 : 0);
     const c = Math.cos(yaw), s = Math.sin(yaw), back = HULL_RADIUS[sh.hull] + 2;
     const paint = side === 0 ? [0.5, 1.0, 1.6] : [1.6, 0.8, 0.3];
     if (sh.thrusting) {
       const len = sh.burning ? 6 : 3;
       for (let k = 0; k < len; k++) {
-        const d = back + k * 2.6 + rnd() * 1.5, j = (rnd() - 0.5) * 2;
+        const d = back + k * 2.6 + Math.sin(time * 9 + k + sh.id) * 0.6, j = 0;
         const col = sh.burning ? (k < 2 ? 0xffffff : 0xa8e6ff) : (k === 0 ? (side ? 0xffc47a : 0xa8e6ff) : side ? 0xff9a3c : 0x62c6ff);
         R.drawPoint(x - c * d - s * j, y - s * d + c * j, z, col, 3.2 - k * 0.35);
       }
       lights.push({ x: x - c * back * 1.4, y: y - s * back * 1.4, z: z + 2, r: sh.burning ? 90 : 60, cr: paint[0], cg: paint[1], cb: paint[2], halo: sh.burning ? 12 : 7 });
     }
-    if (sh.shield > 0 && Math.floor(time * 10) % 2 === 0) {
+    if (sh.shield > 0) {
       for (let k = 0; k < 20; k++) { const a = (k / 20) * Math.PI * 2 + time; R.drawPoint(x + Math.cos(a) * 22, y + Math.sin(a) * 22, z, 0x6dffb4, 1.6); }
     }
   }
@@ -261,7 +266,7 @@ function hud(fps: number): void {
   }
   drawText(out, W, H, 'BEACON WARS  SPRITE-STACK PROTOTYPE', 4, 4, C_TEXT);
   drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 12, C_BLUE);
-  drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 20, C_DIM);
+  if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 20, C_DIM);
   const e = `${Math.max(0, Math.round(me.energy))}`;
   drawText(out, W, H, 'ENERGY', W - 4 - textWidth('ENERGY'), 4, C_DIM);
   drawText(out, W, H, e, W - 4 - textWidth(e), 11, me.energy < maxEnergy(me, tune) * 0.3 ? abgr(0xff6a5a) : C_TEXT);

@@ -319,7 +319,7 @@ export class Renderer {
     const amb = [0.2, 0.23, 0.34], sunc = [0.95, 0.9, 0.82];
     const t = this.time, fogStart = this.camDist + 250, fogLen = 900;
     const cloudZ = -150, nebZ = -520, starLo = -1800, starHi = 1800;
-    const ditherAmp = opt.dither ? 22 : 0;
+    const ditherAmp = opt.dither ? 10 : 0;
     for (let y = 0; y < H; y++) {
       const b = -(y + 0.5 - hh) / f;
       for (let x = 0; x < W; x++) {
@@ -347,21 +347,17 @@ export class Renderer {
           if (fog > 0) { const k = 1 - fog * fog * (3 - 2 * fog); r *= k; g = g * k + 6 * (1 - k); bl = bl * k + 14 * (1 - k); }
         }
         // halos on top of empty space too
-        if (z === Infinity) { r += accR[i] * 200; g += accG[i] * 200; bl += accB[i] * 200; }
+        if (z === Infinity) { r += accR[i] * 150; g += accG[i] * 150; bl += accB[i] * 150; }
         // drifting nebula wisps between the deck and the deep: only where the ray reaches them
         if (dz < -1e-4) {
           const tc = (cloudZ - this.cz) / dz;
           if (tc > 0 && tc < z) {
             const u = (this.cx + dx * tc) * 0.0045 + t * 0.012, v = (this.cy + dy * tc) * 0.0045 + t * 0.004;
-            const d = sample(this.cloud, 256, u, v);
-            if (d > 0.56) {
-              const alpha = Math.min(0.55, (d - 0.56) * 2.6) * Math.min(1, tc / 220);
-              const th = BAYER[(y & 3) * 4 + (x & 3)] + 0.5;
-              if (alpha > th * 0.9) {
-                const hi = sample(this.cloud, 256, u + 0.02, v + 0.02) < d; // lit edge towards the sun
-                const cr = hi ? 120 : 70, cg = hi ? 90 : 52, cb = hi ? 170 : 120;
-                r = r * 0.35 + cr * 0.65; g = g * 0.35 + cg * 0.65; bl = bl * 0.35 + cb * 0.65;
-              }
+            const d = sampleSmooth(this.cloud, 256, u, v);
+            if (d > 0.55) {
+              // a soft, faint veil (no dither: a screen-fixed dither crawls when the camera moves)
+              const alpha = Math.min(0.18, (d - 0.55) * 0.9) * Math.min(1, tc / 220);
+              r += (34 - r) * alpha; g += (30 - g) * alpha; bl += (58 - bl) * alpha;
             }
           }
         }
@@ -371,14 +367,15 @@ export class Renderer {
           if (td > 0 && td < z) {
             const px = this.cx + dx * td, py = -(this.cy + dy * td), tx = Math.floor(px / 16), ty = Math.floor(py / 16);
             if (tx >= 0 && ty >= 0 && tx < mapN && ty < mapN && tiles[ty * mapN + tx] === 2) {
-              const s = this.deck(px, py);
-              if (s > 0xffffff || (s === 0x168058)) { const c = s & 0xffffff; r = r * 0.3 + ((c >> 16) & 255) * 0.8; g = g * 0.3 + ((c >> 8) & 255) * 0.8; bl = bl * 0.3 + (c & 255) * 0.8; }
-              else if (((x + y) & 1) === 0) { r = r * 0.6 + 6; g = g * 0.6 + 40; bl = bl * 0.6 + 30; }
+              // a calm green tint with faint grid lines, no checkerboard and no pulse
+              const line = this.deck(px, py) === 0x168058;
+              const k = line ? 0.22 : 0.13;
+              r += (20 - r) * k; g += (110 - g) * k; bl += (80 - bl) * k;
             }
           }
         }
         if (opt.palette) {
-          const dd = BAYER[(y & 3) * 4 + (x & 3)] * ditherAmp;
+          const dd = ditherAmp ? BAYER[(y & 3) * 4 + (x & 3)] * ditherAmp : 0;
           const R = clamp255(r + dd), G = clamp255(g + dd), B = clamp255(bl + dd);
           out[i] = lut[((R >> 3) << 10) | ((G >> 3) << 5) | (B >> 3)];
         } else {
@@ -395,10 +392,11 @@ export class Renderer {
     // nebula floor far below, coloured by a second noise
     if (dz < -1e-4) {
       const tn = (nebZ - this.cz) / dz;
-      const u = (this.cx + dx * tn) * 0.0011 + t * 0.002, v = (this.cy + dy * tn) * 0.0011;
-      const d = sample(this.cloud, 256, u, v), mixv = sample(this.tint, 128, u * 0.6, v * 0.6);
-      const k = Math.max(0, d - 0.46) * 1.5 * Math.min(1, 900 / tn);
-      r += k * (60 + 90 * mixv); g += k * (30 + 60 * (1 - mixv)); b += k * (110 + 40 * mixv);
+      const u = (this.cx + dx * tn) * 0.0008, v = (this.cy + dy * tn) * 0.0008;
+      const d = sampleSmooth(this.cloud, 256, u, v), mixv = sampleSmooth(this.tint, 128, u * 0.6, v * 0.6);
+      // a dim, smooth glow far below: depth without noise competing with the ships
+      const k = Math.max(0, d - 0.45) * 0.55 * Math.min(1, 900 / tn);
+      r += k * (40 + 50 * mixv); g += k * (24 + 40 * (1 - mixv)); b += k * (80 + 30 * mixv);
     }
     const zp = dz < 0 ? lo : hi;
     if (Math.abs(dz) > 1e-4) {
@@ -409,14 +407,14 @@ export class Renderer {
         // keep the same stars per screen pixel at any angle: a grazing plane packs many cells
         // into a pixel, so the chance a cell holds a star shrinks with its screen footprint
         const nz = Math.abs(dz) / Math.hypot(dx, dy, dz), cellPx = (G * f) / ts;
-        const pStar = Math.min(0.2, (cellPx * cellPx * nz) / 260);
+        const pStar = Math.min(0.12, (cellPx * cellPx * nz) / 520);
         if (h < pStar) {
           const sx = (gx + hash2(gx, gy, 78)) * G, sy = (gy + hash2(gx, gy, 79)) * G;
           const pixel = ts / f; // world px per screen pixel on that plane
           const dd = Math.hypot(px - sx, py - sy) / pixel;
           const big = h < pStar * 0.06 ? 1.3 : 0.62;
           if (dd < big) {
-            const tw = 0.75 + 0.25 * Math.sin(t * 2 + h * 900);
+            const tw = 0.55; // steady: twinkling single pixels read as flicker
             const kind = hash2(gx, gy, 80), lum = (120 + 135 * (h / pStar)) * tw;
             r += lum * (kind < 0.2 ? 1 : 0.85); g += lum * (kind < 0.2 ? 0.9 : 0.9); b += lum * (kind < 0.2 ? 0.6 : 1.05);
           }
@@ -435,9 +433,8 @@ export class Renderer {
     if ((e & OPEN_S && ly > 14) || (e & OPEN_E && lx > 14)) return 0x17203c;
     if ((tx % 2 === 0 && lx < 1) || (ty % 2 === 0 && ly < 1)) return 0x17203c;
     if (v > 0.8 && lx >= 7 && lx < 9 && ly >= 7 && ly < 9) return 0x7f9fcc;
-    const grime = sample(this.tint, 128, sx * 0.015, sy * 0.015);
-    if (e & DEEP) return grime > 0.68 ? 0x1f2c52 : 0x24345e;
-    return grime > 0.7 ? 0x24345e : v > 0.7 ? 0x2f4272 : 0x2a3b68;
+    if (e & DEEP) return 0x24345e;
+    return v > 0.7 ? 0x2c3e6c : 0x2a3b68;
   }
 
   /** Wall faces: a bright trim under the rim, a light strip, then dark plates fading downwards. */
@@ -445,7 +442,7 @@ export class Renderer {
     const along = kind === SIDE_N || kind === SIDE_S ? wx : wy;
     const panel = Math.floor(along / 32), lp = along - panel * 32;
     if (wz > WALL_TOP - 3) return 0x5f7fb6;
-    if (wz > 12 && wz < 14.5) return (panel + Math.floor(this.time * 1.5)) % 5 === 0 ? 0x1000000 | 0x62c6ff : (panel & 1 ? 0x1000000 | 0x2f9ce0 : 0x10162a);
+    if (wz > 12 && wz < 14.5) return panel & 1 ? 0x1000000 | 0x1d6eb0 : 0x10162a; // steady, not blinking
     if (lp < 1.2) return 0x0a0d1a;
     if (wz < -14) return 0x10162a;
     return wz > 0 ? 0x2a3b68 : 0x1f2c52;
@@ -453,10 +450,9 @@ export class Renderer {
 
   /** The safe deck: dark green plates with a bright grid, and a slow pulse running outwards. */
   private deck(wx: number, wy: number): number {
-    const gx = ((wx % 16) + 16) % 16, gy = ((wy % 16) + 16) % 16;
-    if (gx < 1.2 || gy < 1.2) return 0x168058;
-    const r = Math.hypot(wx - this.deckCentre, wy - this.deckCentre) * 0.02 - this.time * 1.2;
-    return Math.sin(r) > 0.92 ? 0x1000000 | 0x2ec488 : 0x0c4a34;
+    const gx = ((wx % 32) + 32) % 32, gy = ((wy % 32) + 32) % 32;
+    if (gx < 1.5 || gy < 1.5) return 0x168058;
+    return 0x0c4a34;
   }
 
   /** A dark one-pixel outline around sprite stacks, drawn on the far side of their edge. */
@@ -478,6 +474,13 @@ const clamp255 = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 function sample(tex: Float32Array, size: number, u: number, v: number): number {
   const x = Math.floor(u * size) & (size - 1), y = Math.floor(v * size) & (size - 1);
   return tex[y * size + x];
+}
+/** Bilinear sample: soft gradients instead of blocky texels that shimmer as the view moves. */
+function sampleSmooth(tex: Float32Array, size: number, u: number, v: number): number {
+  const fx = u * size - 0.5, fy = v * size - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0;
+  const m = size - 1, x1 = (x0 + 1) & m, y1 = (y0 + 1) & m, xa = x0 & m, ya = y0 & m;
+  const a = tex[ya * size + xa], b = tex[ya * size + x1], c = tex[y1 * size + xa], d = tex[y1 * size + x1];
+  return a + (b - a) * ax + (c - a) * ay + (a - b - c + d) * ax * ay;
 }
 function mixRgb(a: number, b: number, k: number): number {
   const r = ((a >> 16) & 255) * (1 - k) + ((b >> 16) & 255) * k, g = ((a >> 8) & 255) * (1 - k) + ((b >> 8) & 255) * k, bl = (a & 255) * (1 - k) + (b & 255) * k;

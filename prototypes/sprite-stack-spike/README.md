@@ -21,7 +21,7 @@ npm run proto:stack:build    # one self-contained file: prototypes/sprite-stack-
 Controls are the game's: arrows or WASD fly, Shift burns, Space guns, F bomb, E mine.
 **1 / 2 / 3** pick top-down / isometric / third-person (**C** cycles), drag to turn the top and
 iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **O** outlines,
-**P** palette snapping, **G** dithering. URL flags: `?bot` (a bot flies your ship), `?view=iso`,
+**P** palette snapping, **G** dithering, **I** frame stats. URL flags: `?bot` (a bot flies your ship), `?view=iso`,
 `?seed=7`, `?stack`, `?manual` (no clock; checks drive `window.proto`).
 
 ## What is in it
@@ -54,6 +54,17 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
   instead of going through walls.
 
 ## Findings so far
+
+- **Eye strain (Oscar's playtest, 2026-11-19):** the first build hurt to look at. The causes were
+  high-frequency noise and flicker: a 4x4 ordered dither over everything (a screen-fixed pattern
+  crawls when the camera moves), a busy purple nebula, dithered cloud and deck patterns,
+  twinkling one-pixel stars, blinking wall lights, random engine flicker, bobbing and tumbling
+  stacks, and per-voxel speckle on rocks. Fixed by: dither and palette snapping off by default
+  (G and P turn them back on), smooth bilinear nebula and clouds kept dim, steady stars and
+  lights, a plain deck tint, no bob or tumble, rocks in broad patches, and the top-down camera
+  moving in whole screen pixels so edges step cleanly. Lesson for production: keep animation
+  and texture low-frequency; the pixel look comes from the low resolution and outlines, not
+  from noise.
 
 - It works and reads well in all three views (`production/qa/evidence/sprite-stack/`).
 - Cost in headless Chromium (software, no GPU): about 17 ms a frame top-down and iso, about

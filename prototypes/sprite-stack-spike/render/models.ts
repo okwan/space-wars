@@ -249,8 +249,9 @@ function rock(r: number, seed: number): Stack {
     const bump = (noise3(x * 0.35, y * 0.35, z * 0.35, seed) - 0.5) * r * 0.55;
     if (d > r + bump) continue;
     const crater = noise3(x * 0.6 + 9, y * 0.6, z * 0.6, seed + 3) > 0.72;
-    const h = hash3(x, y, z, seed);
-    const col = crater ? 0x30303e : h < 0.3 ? 0x6a6a7a : h < 0.8 ? 0x4a4a5a : 0x8e8e9c;
+    // broad patches, not per-voxel speckle (speckle shimmers as the rock turns)
+    const h = noise3(x * 0.25 + 4, y * 0.25, z * 0.25, seed + 7);
+    const col = crater ? 0x3a3a48 : h < 0.45 ? 0x4a4a5a : 0x58586a;
     s.set(x, y, z, col);
   }
   // a few crystals on the surface
