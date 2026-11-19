@@ -49,6 +49,15 @@ export class Renderer {
   /** Seconds, for animated surfaces. */
   time = 0;
   stats = { quads: 0, voxels: 0, lights: 0 };
+  /** Detail factor of the ship layer: ships are drawn at F times the world's resolution. */
+  readonly F = 2;
+  readonly hiW: number; readonly hiH: number;
+  readonly hiDepth: Float32Array; readonly hiAlb: Uint32Array; readonly hiSun: Float32Array;
+  readonly hiFlag: Uint8Array; readonly hiObj: Uint16Array;
+  readonly hiImage: ImageData; readonly hiOut: Uint32Array;
+  /** The HUD, at world resolution: 0 = see-through. Drawn over everything at the end. */
+  readonly hud: Uint32Array;
+  private flames: number[] = [];
 
   constructor(readonly W: number, readonly H: number) {
     const n = W * H;
@@ -57,6 +66,13 @@ export class Renderer {
     this.accR = new Float32Array(n); this.accG = new Float32Array(n); this.accB = new Float32Array(n);
     this.image = new ImageData(W, H);
     this.out = new Uint32Array(this.image.data.buffer);
+    this.hiW = W * this.F; this.hiH = H * this.F;
+    const m = this.hiW * this.hiH;
+    this.hiDepth = new Float32Array(m); this.hiAlb = new Uint32Array(m); this.hiSun = new Float32Array(m);
+    this.hiFlag = new Uint8Array(m); this.hiObj = new Uint16Array(m);
+    this.hiImage = new ImageData(this.hiW, this.hiH);
+    this.hiOut = new Uint32Array(this.hiImage.data.buffer);
+    this.hud = new Uint32Array(n);
   }
 
   /** Sets the camera for this frame. */
@@ -78,6 +94,8 @@ export class Renderer {
   begin(time: number): void {
     this.time = time;
     this.depth.fill(Infinity); this.flags.fill(0); this.obj.fill(0);
+    this.hiDepth.fill(Infinity); this.hiFlag.fill(0); this.hiObj.fill(0); this.hud.fill(0);
+    this.flames.length = 0;
     this.stats.quads = 0; this.stats.voxels = 0; this.stats.lights = 0;
   }
 
@@ -273,6 +291,133 @@ export class Renderer {
       const i = yy * this.W + xx;
       if (zc >= this.depth[i]) continue;
       this.depth[i] = zc; this.albedo[i] = col; this.sun[i] = 0; this.flags[i] = F_EMIT; this.obj[i] = id;
+    }
+  }
+
+  // ---- the ship layer: twice the detail, composited over the pixel world ----------------------
+
+  /**
+   * Draws a sprite stack into the detail layer (ships): same projection, F times the pixels, and
+   * hidden by anything nearer in the world layer. `scale` is world px per voxel of this model.
+   */
+  drawModelHi(m: Model, x: number, y: number, z: number, yaw: number, scale: number, id: number, roll = 0, flash = 0): void {
+    const F = this.F, W = this.hiW, H = this.hiH, LW = this.W;
+    const cyw = Math.cos(yaw), syw = Math.sin(yaw), cr = Math.cos(roll), sr = Math.sin(roll);
+    const r00 = cyw, r01 = -syw * cr, r02 = syw * sr;
+    const r10 = syw, r11 = cyw * cr, r12 = -cyw * sr;
+    const r20 = 0, r21 = sr, r22 = cr;
+    const px = x - this.cx, py = y - this.cy, pz = z - this.cz;
+    const oz = px * this.fx + py * this.fy + pz * this.fz;
+    if (oz < NEAR || oz > this.far) return;
+    const ox = px * this.rx + py * this.ry, oy = px * this.ux + py * this.uy + pz * this.uz;
+    const f = this.focal * F, k0 = f / oz;
+    const sxc = W / 2 + ox * k0, syc = H / 2 - oy * k0, rad = m.radius * scale * k0 + 2;
+    if (sxc + rad < 0 || sxc - rad > W || syc + rad < 0 || syc - rad > H) return;
+    const ax = (r00 * this.rx + r10 * this.ry) * scale, ay = (r00 * this.ux + r10 * this.uy + r20 * this.uz) * scale, az = (r00 * this.fx + r10 * this.fy + r20 * this.fz) * scale;
+    const bx = (r01 * this.rx + r11 * this.ry) * scale, by = (r01 * this.ux + r11 * this.uy + r21 * this.uz) * scale, bz = (r01 * this.fx + r11 * this.fy + r21 * this.fz) * scale;
+    const cx = (r02 * this.rx + r12 * this.ry) * scale, cy = (r02 * this.ux + r12 * this.uy + r22 * this.uz) * scale, cz = (r02 * this.fx + r12 * this.fy + r22 * this.fz) * scale;
+    const L = this.L;
+    const lx = r00 * L[0] + r10 * L[1] + r20 * L[2], ly = r01 * L[0] + r11 * L[1] + r21 * L[2], lz = r02 * L[0] + r12 * L[1] + r22 * L[2];
+    const lod = m.lods[k0 * scale < 0.75 && m.lods.length > 1 ? 1 : 0];
+    const unit = lod.unit * scale * 1.04, hw = W / 2, hh = H / 2;
+    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, depth } = this;
+    for (let i = 0; i < lod.n; i++) {
+      const vx = lod.x[i], vy = lod.y[i], vz = lod.z[i];
+      const zc = oz + vx * az + vy * bz + vz * cz;
+      if (zc < NEAR) continue;
+      const k = f / zc;
+      const sx = hw + (ox + vx * ax + vy * bx + vz * cx) * k, sy = hh - (oy + vx * ay + vy * by + vz * cy) * k;
+      const size = unit * k, side = size <= 1 ? 1 : Math.ceil(size);
+      const xa = Math.round(sx - side / 2), ya = Math.round(sy - side / 2);
+      if (xa >= W || ya >= H || xa + side <= 0 || ya + side <= 0) continue;
+      const emit = lod.emit[i];
+      const d = lod.nx[i] * lx + lod.ny[i] * ly + lod.nz[i] * lz;
+      const sh = emit ? 0 : Math.max(0, (d + 0.35) / 1.35);
+      const col = flash > 0 ? mixRgb(lod.col[i], 0xffffff, flash) : lod.col[i];
+      const x1 = Math.min(W, xa + side), y1 = Math.min(H, ya + side), xs = Math.max(0, xa);
+      for (let yy = Math.max(0, ya); yy < y1; yy++) {
+        let p = yy * W + xs;
+        const lrow = (yy >> 1) * LW;
+        for (let xx = xs; xx < x1; xx++, p++) {
+          if (zc >= hiDepth[p] || zc >= depth[lrow + (xx >> 1)]) continue;
+          hiDepth[p] = zc; hiAlb[p] = col; hiSun[p] = sh; hiFlag[p] = emit ? 2 : 1; hiObj[p] = id;
+        }
+      }
+    }
+    this.stats.voxels += lod.n;
+  }
+
+  /** A soft additive glow in the detail layer (engine flames): radius in world px, colour 0..1. */
+  glow(x: number, y: number, z: number, r: number, cr: number, cg: number, cb: number): void { this.flames.push(x, y, z, r, cr, cg, cb); }
+
+  /**
+   * Builds the final picture: the world layer scaled up F times, ships lit on top (sun and the
+   * same point lights), a thin soft outline round each ship, the flames, then the HUD.
+   */
+  composite(lights: Light[]): void {
+    const F = this.F, W = this.hiW, H = this.hiH, LW = this.W, f = this.focal * F, hw = W / 2, hh = H / 2;
+    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, hiOut, out, hud } = this;
+    const amb = [0.32, 0.34, 0.44], sunc = [0.82, 0.8, 0.74];
+    const fogStart = this.camDist + 250, fogLen = 900;
+    for (let y = 0; y < H; y++) {
+      const lrow = (y >> 1) * LW, b = -(y + 0.5 - hh) / f;
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x, fl = hiFlag[p];
+        if (!fl) { hiOut[p] = out[lrow + (x >> 1)]; continue; }
+        const c = hiAlb[p];
+        let r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
+        if (fl === 1) {
+          const s = hiSun[p];
+          let lr = amb[0] + sunc[0] * s, lg = amb[1] + sunc[1] * s, lb = amb[2] + sunc[2] * s;
+          // point lights on the hull
+          const z = hiDepth[p], a = (x + 0.5 - hw) / f;
+          const wx = this.cx + (this.fx + this.rx * a + this.ux * b) * z, wy = this.cy + (this.fy + this.ry * a + this.uy * b) * z, wz = this.cz + (this.fz + this.uz * b) * z;
+          for (let i = 0; i < lights.length; i++) {
+            const l = lights[i], dx = wx - l.x, dy = wy - l.y, dz = wz - l.z, d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 >= l.r * l.r) continue;
+            const att = 1 - Math.sqrt(d2) / l.r, gk = att * att * 1.2;
+            lr += l.cr * gk; lg += l.cg * gk; lb += l.cb * gk;
+          }
+          r *= lr; g *= lg; bl *= lb;
+        }
+        const fog = Math.min(1, Math.max(0, (hiDepth[p] - fogStart) / fogLen));
+        if (fog > 0) { const k = 1 - fog * fog * (3 - 2 * fog); r *= k; g = g * k + 6 * (1 - k); bl = bl * k + 14 * (1 - k); }
+        hiOut[p] = 0xff000000 | (clamp255(bl) << 16) | (clamp255(g) << 8) | clamp255(r);
+      }
+    }
+    // a thin, soft outline: one detail pixel, darkening what is behind rather than painting black
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const p = y * W + x, me = hiObj[p];
+      if (me) continue;
+      let edge = false;
+      for (const q of [p - 1, p + 1, p - W, p + W]) if (hiObj[q]) { edge = true; break; }
+      if (!edge) continue;
+      const c = hiOut[p];
+      hiOut[p] = 0xff000000 | ((((c >> 16) & 255) * 0.35) << 16) | ((((c >> 8) & 255) * 0.35) << 8) | ((c & 255) * 0.35 + 10);
+    }
+    // flames: soft additive light, hidden only by what is clearly in front of them
+    const fl = this.flames;
+    for (let i = 0; i < fl.length; i += 7) {
+      const px = fl[i] - this.cx, py = fl[i + 1] - this.cy, pz = fl[i + 2] - this.cz;
+      const zc = px * this.fx + py * this.fy + pz * this.fz;
+      if (zc < NEAR) continue;
+      const k = f / zc, sx = hw + (px * this.rx + py * this.ry) * k, sy = hh - (px * this.ux + py * this.uy + pz * this.uz) * k;
+      const rad = Math.max(1.2, fl[i + 3] * k), cr = fl[i + 4], cg = fl[i + 5], cb = fl[i + 6];
+      const xa = Math.max(0, Math.floor(sx - rad)), xb = Math.min(W - 1, Math.ceil(sx + rad));
+      const ya = Math.max(0, Math.floor(sy - rad)), yb = Math.min(H - 1, Math.ceil(sy + rad));
+      for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) {
+        const d = Math.hypot(x + 0.5 - sx, y + 0.5 - sy) / rad;
+        if (d >= 1) continue;
+        const p = y * W + x, front = Math.min(hiDepth[p], this.depth[(y >> 1) * LW + (x >> 1)]);
+        if (front < zc - 6) continue;
+        const g = (1 - d) * (1 - d) * 255, c = hiOut[p];
+        hiOut[p] = 0xff000000 | (clamp255(((c >> 16) & 255) + g * cb) << 16) | (clamp255(((c >> 8) & 255) + g * cg) << 8) | clamp255((c & 255) + g * cr);
+      }
+    }
+    // the HUD on top, each HUD pixel F x F
+    for (let y = 0; y < H; y++) {
+      const lrow = (y >> 1) * LW;
+      for (let x = 0; x < W; x++) { const h = hud[lrow + (x >> 1)]; if (h) hiOut[y * W + x] = h; }
     }
   }
 

@@ -111,6 +111,28 @@ function half(s: Stack): Stack {
   return o;
 }
 
+/**
+ * Doubles a stack's detail with smoothing: each fine cell takes the trilinear blend of the
+ * coarse cells around it and is filled above one half, so stair-step diagonals and corners come
+ * out rounder. Colour comes from the nearest filled coarse cell.
+ */
+export function upsample(s: Stack): Stack {
+  const o = new Stack(s.w * 2, s.d * 2, s.h * 2);
+  for (let z = 0; z < o.h; z++) for (let y = 0; y < o.d; y++) for (let x = 0; x < o.w; x++) {
+    const cx = (x + 0.5) / 2 - 0.5, cy = (y + 0.5) / 2 - 0.5, cz = (z + 0.5) / 2 - 0.5;
+    const x0 = Math.floor(cx), y0 = Math.floor(cy), z0 = Math.floor(cz), fx = cx - x0, fy = cy - y0, fz = cz - z0;
+    let occ = 0, best = 0, bw = -1;
+    for (let k = 0; k < 8; k++) {
+      const dx = k & 1, dy = (k >> 1) & 1, dz = k >> 2;
+      const wgt = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz);
+      const c = s.get(x0 + dx, y0 + dy, z0 + dz);
+      if (c & FILLED) { occ += wgt; if (wgt > bw) { bw = wgt; best = c; } }
+    }
+    if (occ > 0.5) o.cells[(z * o.d + y) * o.w + x] = best;
+  }
+  return o;
+}
+
 /** Compiles a stack around an origin (in voxels; default: the centre of its footprint, z = 0). */
 export function compile(name: string, s: Stack, oz = 0): Model {
   const ox = s.w / 2, oy = s.d / 2;
@@ -124,7 +146,7 @@ export function compile(name: string, s: Stack, oz = 0): Model {
 export interface Paint { dark: number; main: number; light: number; glow: number }
 export const BLUE: Paint = { dark: 0x14467a, main: 0x2f9ce0, light: 0x62c6ff, glow: 0xa8e6ff };
 export const ORANGE: Paint = { dark: 0x6e2a0e, main: 0xe06c22, light: 0xff9a3c, glow: 0xffc47a };
-const WHITE = 0xd8d8e0, WHITE2 = 0xb4b4c0, GREY = 0x6a6a7a, INK = 0x30303e, GLASS = 0x1d6eb0, GLASS_HI = 0xa8e6ff;
+const WHITE = 0xbcc2d0, WHITE2 = 0x9aa0b0, GREY = 0x6a6a7a, INK = 0x30303e, GLASS = 0x1d6eb0, GLASS_HI = 0xa8e6ff;
 
 /** Dart: a slim arrowhead with forward canards and one engine. */
 function dart(p: Paint): Stack {
@@ -262,14 +284,24 @@ function rock(r: number, seed: number): Stack {
   return s;
 }
 
+/** Engine nozzles of each hull in coarse voxels from the model origin: [back x, side y] pairs. */
+export const ENGINES: Record<string, [number, number][]> = {
+  dart: [[-8, 0]],
+  lancer: [[-10, -2.5], [-10, 2.5]],
+  bulwark: [[-9, -4], [-9, 0], [-9, 4]],
+};
+
 /** All models the prototype draws, by name. Ships come in both paints: `dart:0` is yours. */
 export function buildModels(): Map<string, Model> {
   const m = new Map<string, Model>();
   const paints = [BLUE, ORANGE];
+  // ships at double detail (drawn at half a world voxel each, in the renderer's detail layer)
   paints.forEach((p, i) => {
-    m.set(`dart:${i}`, compile('Dart', dart(p), 3));
-    m.set(`lancer:${i}`, compile('Lancer', lancer(p), 3));
-    m.set(`bulwark:${i}`, compile('Bulwark', bulwark(p), 3.5));
+    // (the slice viewer keeps showing the hand-drawn coarse stack)
+    const fine = (name: string, st: Stack, oz: number): Model => ({ ...compile(name, upsample(st), oz * 2), stack: st });
+    m.set(`dart:${i}`, fine('Dart', dart(p), 3));
+    m.set(`lancer:${i}`, fine('Lancer', lancer(p), 3));
+    m.set(`bulwark:${i}`, fine('Bulwark', bulwark(p), 3.5));
   });
   m.set('pod', compile('Salvage pod', pod(), 3.5));
   m.set('mine', compile('Mine', mine(), 2));

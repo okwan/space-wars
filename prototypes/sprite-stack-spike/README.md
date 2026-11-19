@@ -55,6 +55,17 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **Ships too pixelated and hard to see, no thrusters, bots too strong (Oscar, 2026-11-19):**
+  ships now draw in a detail layer at twice the world's resolution (`drawModelHi`,
+  `composite` in `render/raster.ts`) from stacks upsampled with smoothing (`upsample` in
+  `render/models.ts`), lit by the same sun and point lights, with a thin soft outline instead
+  of a black one, and softer hull whites. Every nozzle now has a soft additive plume (steady,
+  slow shimmer, longer on the afterburner) and a pilot light. Bots are gentler in this
+  prototype only (`main.ts`: slower reactions, looser aim, fire only when lined up, shorter
+  notice range, fewer bombs and mines, 12 pilots, 5 s spawn shield, 20-fight newcomer grace;
+  `?hardbots` restores the shared config). In a scripted 9-minute run, a newcomer who just
+  flies and shoots died 20 times with the old bots and 2 times with these.
+
 - **Eye strain (Oscar's playtest, 2026-11-19):** the first build hurt to look at. The causes were
   high-frequency noise and flicker: a 4x4 ordered dither over everything (a screen-fixed pattern
   crawls when the camera moves), a busy purple nebula, dithered cloud and deck patterns,

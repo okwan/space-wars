@@ -14,7 +14,7 @@ import { tuningFrom } from '../../src/game/tuning';
 import { HULL_RADIUS, type Ship, type ShipInput } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
 import { abgr, drawText, textWidth } from './render/font';
-import { buildModels, type Model } from './render/models';
+import { buildModels, ENGINES, type Model } from './render/models';
 import { Renderer, type CameraState, type Light } from './render/raster';
 import { buildWalls, WALL_TOP } from './render/walls';
 
@@ -22,16 +22,26 @@ import { buildWalls, WALL_TOP } from './render/walls';
 const params = new URLSearchParams(location.search);
 const W = 480, H = 270;
 const tune = tuningFrom(config);
+// Gentler bots for this prototype (Oscar: "I die instantly"): slower to react, looser aim, fire
+// only when well lined up, notice you from nearer, fewer bombs and mines, a longer spawn shield,
+// fewer pilots, and a longer "new pilot" grace where their aim is looser still.
+if (!params.has('hardbots')) Object.assign(tune, {
+  pilots: 12, spawn_shield: 5,
+  bot_reaction: 0.55, bot_aim_error: 0.24, bot_fire_angle: 0.06, bot_engage_range: 420,
+  bot_bomb_range: 260, bot_mine_chance: 0.015, bot_bounty_reach: 0.2,
+  bot_rookie_fights: 20, bot_rookie_aim: 3.5,
+});
 const seed = Number(params.get('seed') ?? config.seed);
 const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0] });
 const ME = 0;
 const map = zoneMap(world.mapSeed, world.tiles);
 const mesh = buildWalls(map);
 const models = buildModels();
+
 const R = new Renderer(W, H);
 R.deckCentre = map.centre * TILE;
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
-canvas.width = W; canvas.height = H;
+canvas.width = R.hiW; canvas.height = R.hiH;
 const ctx = canvas.getContext('2d')!;
 
 /** Render space: X = sim x, Y = -sim y, z up. Ships hover at this height between the walls. */
@@ -163,6 +173,7 @@ const rocks = Array.from({ length: 260 }, (_, i) => ({
   yaw: rnd() * 6.28, spin: (rnd() - 0.5) * 0.12, tilt: rnd() * 6.28,
 }));
 
+let lastLights: Light[] = [];
 function draw(time: number, dt: number): CameraState {
   const me = world.ships[ME];
   const cs = updateCamera(dt, me);
@@ -197,17 +208,25 @@ function draw(time: number, dt: number): CameraState {
     roll.set(sh.id, rl);
     const side = sh.id === ME ? 0 : 1, m = models.get(`${sh.hull}:${side}`)!;
     const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z; // no bob: a moving voxel grid shimmers
-    R.drawModel(m, x, y, z, yaw, VOX, 1000 + sh.id, rl, 0, sh.flash > 0 ? 0.7 : 0);
-    const c = Math.cos(yaw), s = Math.sin(yaw), back = HULL_RADIUS[sh.hull] + 2;
-    const paint = side === 0 ? [0.5, 1.0, 1.6] : [1.6, 0.8, 0.3];
-    if (sh.thrusting) {
-      const len = sh.burning ? 6 : 3;
-      for (let k = 0; k < len; k++) {
-        const d = back + k * 2.6 + Math.sin(time * 9 + k + sh.id) * 0.6, j = 0;
-        const col = sh.burning ? (k < 2 ? 0xffffff : 0xa8e6ff) : (k === 0 ? (side ? 0xffc47a : 0xa8e6ff) : side ? 0xff9a3c : 0x62c6ff);
-        R.drawPoint(x - c * d - s * j, y - s * d + c * j, z, col, 3.2 - k * 0.35);
+    R.drawModelHi(m, x, y, z, yaw, VOX / 2, 1000 + sh.id, rl, sh.flash > 0 ? 0.6 : 0);
+    // thrusters: a soft plume from every nozzle, steady with a slow shimmer, longer on the burner
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const glowCol = side === 0 ? [0.35, 0.75, 1.0] : [1.0, 0.6, 0.25];
+    ENGINES[sh.hull].forEach(([ex, ey], n) => {
+      const nx = x + (ex * c - ey * s) * VOX, ny = y + (ex * s + ey * c) * VOX;
+      R.glow(nx, ny, z, 2.2, glowCol[0] * 0.5, glowCol[1] * 0.5, glowCol[2] * 0.5); // pilot light, always on
+      if (!sh.thrusting) return;
+      const L = (sh.burning ? 34 : 22) * (1 + 0.05 * Math.sin(time * 11 + n * 2 + sh.id));
+      for (let k = 0; k < 8; k++) {
+        const t = k / 7, d = t * L, rr = (sh.burning ? 5.5 : 4.5) * (1 - t * 0.6);
+        const hot = Math.max(0, 1 - t * 3); // white-hot near the nozzle
+        const fade = (1 - t) * 0.55;
+        R.glow(nx - c * d, ny - s * d, z, rr, (glowCol[0] + hot) * fade, (glowCol[1] + hot) * fade, (glowCol[2] + hot) * fade);
       }
-      lights.push({ x: x - c * back * 1.4, y: y - s * back * 1.4, z: z + 2, r: sh.burning ? 90 : 60, cr: paint[0], cg: paint[1], cb: paint[2], halo: sh.burning ? 12 : 7 });
+    });
+    if (sh.thrusting) {
+      const back = HULL_RADIUS[sh.hull] + 6;
+      lights.push({ x: x - c * back, y: y - s * back, z: z + 2, r: sh.burning ? 90 : 60, cr: glowCol[0], cg: glowCol[1], cb: glowCol[2], halo: 0 });
     }
     if (sh.shield > 0) {
       for (let k = 0; k < 20; k++) { const a = (k / 20) * Math.PI * 2 + time; R.drawPoint(x + Math.cos(a) * 22, y + Math.sin(a) * 22, z, 0x6dffb4, 1.6); }
@@ -247,6 +266,7 @@ function draw(time: number, dt: number): CameraState {
     }
   }
   R.resolve(lights, mesh.info, map.tiles, map.n, opt);
+  lastLights = lights;
   return cs;
 }
 
@@ -255,7 +275,7 @@ const C_TEXT = abgr(0xd2e2f2), C_DIM = abgr(0x7f9fcc), C_BLUE = abgr(0x62c6ff), 
 let radarImg: Uint32Array | null = null;
 const RADAR = 64, RSTEP = 3; // radar: 64 px square, one px per three tiles
 function hud(fps: number): void {
-  const out = R.out, me = world.ships[ME];
+  const out = R.hud, me = world.ships[ME];
   // name tags over ships
   for (const sh of world.ships) {
     if (!sh.alive || sh.id === ME) continue;
@@ -301,7 +321,7 @@ function hud(fps: number): void {
 
 /** The slice viewer: your hull's stack laid out slice by slice, and drawn the classic way. */
 function stackPanel(time: number): void {
-  const me = world.ships[ME], m: Model = models.get(`${me.hull}:0`)!, s = m.stack, out = R.out;
+  const me = world.ships[ME], m: Model = models.get(`${me.hull}:0`)!, s = m.stack, out = R.hud;
   const px = 6, py = 30, pw = Math.max(8 + s.h * (s.w + 3), 130), ph = s.d + 92;
   for (let y = py; y < py + ph; y++) for (let x = px; x < px + pw; x++) out[y * W + x] = abgr(0x0a0d1a);
   drawText(out, W, H, `${m.name} AS ${s.h} SLICES`, px + 3, py + 3, C_TEXT);
@@ -357,7 +377,8 @@ function render(dt: number): void {
   draw(simTime, dt);
   if (showHud) hud(fps);
   if (showStack) stackPanel(simTime);
-  ctx.putImageData(R.image, 0, 0);
+  R.composite(lastLights);
+  ctx.putImageData(R.hiImage, 0, 0);
 }
 
 /** What a check (Playwright) can drive: views, steps and frames without the clock. */
