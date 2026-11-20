@@ -57,6 +57,10 @@ const sfx = new Sfx();
 const SHIP_Z = 10;
 const VOX = 2; // world px per voxel
 const ui = new Ui({ W, H, R, world, tune, map, me: ME, shipZ: SHIP_Z, sfx });
+// first launch: the controls and tips card (once per browser; ?tips shows it again)
+ui.tips = !params.has('manual') && !params.has('bot') && (params.has('tips') || (() => {
+  try { return !localStorage.getItem('bw-proto-tips'); } catch { return true; }
+})());
 const BULLET = [0, 0x9fe4ff, 0xffe27a, 0xff86e0], BOMB = [0, 0xff8a3a, 0xff4fb0, 0xb07dff];
 
 /**
@@ -134,6 +138,11 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'Tab') e.preventDefault();
   sfx.start();
   if (e.repeat) return;
+  if (ui.tips) { // any key closes the card (and is not also flown with)
+    ui.tips = false; try { localStorage.setItem('bw-proto-tips', '1'); } catch { /* private mode */ }
+    e.preventDefault(); return;
+  }
+  if (e.code === 'KeyT') { ui.tips = true; down.clear(); return; }
   down.add(e.code);
   if (e.code === 'KeyM') sfx.toggle();
   if (e.code === 'Digit1') view = 'top';
@@ -152,7 +161,10 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => down.delete(e.code));
 addEventListener('blur', () => down.clear());
 let dragX: number | null = null;
-canvas.addEventListener('pointerdown', e => { dragX = e.clientX; sfx.start(); });
+canvas.addEventListener('pointerdown', e => {
+  dragX = e.clientX; sfx.start();
+  if (ui.tips) { ui.tips = false; try { localStorage.setItem('bw-proto-tips', '1'); } catch { /* private mode */ } }
+});
 addEventListener('pointerup', () => { dragX = null; });
 addEventListener('pointermove', e => { if (dragX !== null && view !== 'chase') { isoTurn -= (e.clientX - dragX) * 0.01; dragX = e.clientX; } });
 const held = (...c: string[]): boolean => c.some(k => down.has(k));
@@ -169,7 +181,10 @@ let showStack = params.has('stack'), showHud = !params.has('nohud'), showStats =
 interface Bit { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; col: number; size: number }
 interface Flash { x: number; y: number; z: number; r: number; life: number; max: number; cr: number; cg: number; cb: number; ring: number }
 const bits: Bit[] = [], flashes: Flash[] = [];
-const roll = new Map<number, number>(), lastA = new Map<number, number>();
+// Banking: each ship leans into its turn on a soft spring (a little settle when you let go). The
+// lean follows how fast the ship is actually turning, measured per game step, so it never jitters.
+const MAX_BANK = 0.78; // radians, about 45 degrees at full turn rate
+const bank = new Map<number, { r: number; v: number }>(), simA = new Map<number, number>(), turnRateOf = new Map<number, number>();
 const rnd = Math.random;
 function burst(x: number, y: number, n: number, speed: number, cols: number[]): void {
   for (let i = 0; i < n; i++) {
@@ -182,6 +197,11 @@ function burst(x: number, y: number, n: number, speed: number, cols: number[]): 
 const fightStats = { volleys: 0, hits: 0, kills: 0 };
 function effects(): void {
   ui.events(world.events);
+  for (const sh of world.ships) { // turn rate this step, for the banking
+    const prev = simA.get(sh.id) ?? sh.a;
+    turnRateOf.set(sh.id, sh.alive ? angTo(prev, sh.a) / STEP : 0);
+    simA.set(sh.id, sh.a);
+  }
   for (const ev of world.events) {
     if (ev.type === 'shot' && ev.kind === 'bullet') fightStats.volleys++;
     else if (ev.type === 'hit') fightStats.hits++;
@@ -241,10 +261,14 @@ function draw(time: number, dt: number): CameraState {
   // ships
   for (const sh of world.ships) {
     if (!sh.alive) continue;
-    const prev = lastA.get(sh.id) ?? sh.a, turn = angTo(prev, sh.a) / Math.max(dt, 1e-3);
-    lastA.set(sh.id, sh.a);
-    const rl = (roll.get(sh.id) ?? 0) * 0.85 + Math.max(-0.6, Math.min(0.6, turn * 0.13)) * 0.15;
-    roll.set(sh.id, rl);
+    const b = bank.get(sh.id) ?? { r: 0, v: 0 };
+    const full = tune[`${sh.hull}_turn`], target = Math.max(-1, Math.min(1, (turnRateOf.get(sh.id) ?? 0) / full)) * MAX_BANK;
+    for (let left = Math.min(dt, 0.1); left > 0; left -= 1 / 120) { // spring: w 13/s, damping 0.72
+      const h = Math.min(left, 1 / 120), W0 = 13;
+      b.v += ((target - b.r) * W0 * W0 - 2 * 0.72 * W0 * b.v) * h; b.r += b.v * h;
+    }
+    bank.set(sh.id, b);
+    const rl = b.r;
     const side = sh.id === ME ? 0 : 1, m = models.get(`${sh.hull}:${side}`)!;
     const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z; // no bob: a moving voxel grid shimmers
     R.drawModelHi(m, x, y, z, yaw, VOX / 2, 1000 + sh.id, rl, sh.flash > 0 ? 0.6 : 0);
@@ -448,7 +472,7 @@ function frame(now: number): void {
   last = now;
   fps = fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
   if (ui.hitStop > 0) ui.hitStop -= dt; // the kill's freeze-frame: the zone holds its breath
-  else acc += dt;
+  else if (!ui.tips) acc += dt; // the zone waits while the tips card is up
   ui.update(dt);
   const input = readInput();
   while (acc >= STEP) {
@@ -485,6 +509,7 @@ function render(dt: number): void {
   },
   stats: fightStats,
   locked() { return ui.lockId; },
+  showTips(on: boolean) { ui.tips = on; },
   aim() { return ui.aimPts; },
   hold(code: string, on: boolean) { if (on) down.add(code); else down.delete(code); },
   set(o: Partial<typeof opt>) { Object.assign(opt, o); },

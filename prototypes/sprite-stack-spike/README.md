@@ -55,6 +55,14 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **Ships should tilt when turning; how does health come back? (Oscar, 2026-11-20):** ships now
+  bank up to about 45 degrees on a soft spring that follows how fast they are really turning
+  (measured per game step, so it never jitters) and settle with a slight overshoot when the turn
+  ends. Energy (health and ammo) refills on its own whenever you are not on the afterburner; the
+  bar now shows it: a light sweeps along it, its end glows, and it reads
+  "RECHARGING +110/S", "FULL" or "AFTERBURNER DRAINING". A controls and tips card opens on the
+  first launch (once per browser, T reopens it, `?tips` forces it) and the zone waits behind it.
+
 - **Hard to kill anyone, awkward to aim (Oscar, 2026-11-20):** measured first. Bullets flew at
   470 px/s against ships doing up to 345, so they visibly drifted with your ship's speed and
   arrived late. A kill took about 13 hits. The hit check also only looked at where a bullet

@@ -5,7 +5,7 @@
 // Everything is drawn into the renderer's 480 x 270 HUD layer, so it is as crisp as the game.
 
 import { inSafe, type ZoneMap } from '../../src/game/map';
-import { bombLevel, gunLevel, lvl, maxEnergy, mineMax } from '../../src/game/salvage';
+import { bombLevel, gunLevel, lvl, maxEnergy, mineMax, regen } from '../../src/game/salvage';
 import type { GameEvent, Ship, Tuning, Upgrade, World } from '../../src/game/types';
 import { drawText, textWidth } from './render/font';
 import type { Renderer } from './render/raster';
@@ -54,6 +54,8 @@ export interface UiDeps { W: number; H: number; R: Renderer; world: World; tune:
 export class Ui {
   /** Seconds the game should freeze (the kill's hit-stop); the loop reads and spends this. */
   hitStop = 0;
+  /** The controls and tips card (first launch, or T). The game waits while it is up. */
+  tips = false;
   /** The enemy a shot fired now would meet (from the aim line), or -1: it gets brackets. */
   lockId = -1;
   /** The aim line's points in sim px (x, y pairs), from the nose outwards. */
@@ -242,6 +244,7 @@ export class Ui {
     this.killFeed();
     this.bottom();
     this.bannerDraw();
+    if (this.tips) this.tipsCard();
     for (const c of this.coins) {
       for (let k = 1; k <= 2 && c.homing; k++) this.rect(c.x - 1, c.y + k * 2, 2, 2, col(GOLD, 120 / k));
       this.icon('coin', Math.round(c.x) - 3, Math.round(c.y) - 3, GOLD);
@@ -411,8 +414,23 @@ export class Ui {
     this.rect(bx, by, fw, 2, col(WHITE, 90)); // a glassy highlight
     for (let k = 1; k < 10; k++) this.rect(bx + Math.round(bw * k / 10), by, 1, bh, col(PANEL, 140));
     if (sh.burning) for (let k = 0; k < 3; k++) this.rect(bx + fw - 2 - k * 3, by + 2, 1, bh - 4, col(WHITE, 200 - k * 60));
+    // recharging: a soft light sweeps along the bar and its end glows, so you can see it fill
+    const full = E >= maxE - 0.5;
+    if (!full && !sh.burning && fw > 2) {
+      const sweep = ((this.t * 0.9) % 1.3) * fw, half = 10;
+      for (let xx = Math.max(0, Math.floor(sweep - half)); xx < Math.min(fw, sweep + half); xx++) {
+        const k = 1 - Math.abs(xx - sweep) / half;
+        this.rect(bx + xx, by, 1, bh, col(WHITE, Math.round(85 * k * k)));
+      }
+      const glow = Math.round(150 + 90 * Math.sin(this.t * 6));
+      this.rect(bx + fw - 1, by - 1, 2, bh + 2, col(WHITE, glow));
+    }
     this.icon('bolt', bx - 11, by + 1, c);
     this.text('ENERGY', bx, by + bh + 4, DIM);
+    const state = sh.burning ? ['AFTERBURNER DRAINING', ORANGE] as const
+      : full ? ['FULL', DIM] as const
+      : [`RECHARGING +${Math.round(regen(sh, tune))}/S`, GREEN] as const;
+    this.text(state[0], bx + textWidth('ENERGY') + 8, by + bh + 4, state[1], 1, full ? 160 : 255);
     this.text(`${Math.round(E)}`, bx + bw + 6, by + 3, low ? RED : WHITE);
     if (low && Math.sin(this.t * 7) > -0.3) this.textC('LOW ENERGY', bx + bw / 2, by - 16, RED);
     // salvage toast
@@ -420,6 +438,37 @@ export class Ui {
       const k = this.toast.t / this.toast.max, a = Math.round(255 * clamp01((1 - k) * 4));
       this.textC(this.toast.text, W / 2, y0 - 20 - (safe ? 10 : 0) - k * 6, k < 0.1 ? WHITE : VIOLET, 1, a);
     }
+  }
+
+  private tipsCard(): void {
+    const W = this.W, H = this.H, pw = 300, ph = 186, px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2) - 6;
+    this.rect(0, 0, W, H, col(0x000000, 110));
+    this.panel(px, py, pw, ph, CYAN, 235);
+    this.frame(px, py, pw, ph, col(0x2f4a78));
+    let y = py + 8;
+    this.textC('HOW TO FLY', W / 2, y, WHITE, 2); y += 18;
+    const keys: [string, string][] = [
+      ['ARROWS OR WASD', 'TURN AND THRUST: YOU AIM BY TURNING'],
+      ['SHIFT', 'AFTERBURNER (USES ENERGY)'],
+      ['SPACE', 'GUNS'], ['F', 'BOMB: BIG SPLASH DAMAGE'], ['E', 'DROP A MINE'],
+      ['1 2 3 OR C', 'CAMERA: TOP-DOWN, ISOMETRIC, BEHIND'],
+    ];
+    for (const [k, d] of keys) { this.text(k, px + 14, y, CYAN); this.text(d, px + 82, y, 0xd2e2f2); y += 8; }
+    y += 6;
+    this.textC('TIPS', W / 2, y, GOLD, 2); y += 16;
+    const tips: [string, number][] = [
+      ['ENERGY IS YOUR HEALTH AND YOUR AMMO.', WHITE],
+      ['IT REFILLS ON ITS OWN: EASE OFF THE GUNS TO RECHARGE.', GREEN],
+      ['THE DOTS FROM YOUR NOSE SHOW WHERE SHOTS WILL GO.', 0x8fd0ff],
+      ['THEY TURN ORANGE WHEN A SHOT WOULD HIT.', 0xffb070],
+      ['FLY INTO VIOLET PODS FOR UPGRADES.', VIOLET],
+      ['THE GREEN ZONE IS SAFE: NO DAMAGE, NO WEAPONS.', GREEN],
+      ['DOWN HIGH-BOUNTY PILOTS FOR A BIG SCORE.', GOLD],
+    ];
+    for (const [t, c] of tips) { this.text(t, px + 14, y, c); y += 8; }
+    const blink = Math.sin(this.t * 4) > -0.4 ? 255 : 140;
+    this.textC('PRESS ANY KEY TO LAUNCH', W / 2, py + ph - 20, WHITE, 1, blink);
+    this.textC('T SHOWS THIS AGAIN  -  M SOUND  -  H HIDES THE HUD', W / 2, py + ph - 11, DIM);
   }
 
   private bannerDraw(): void {
