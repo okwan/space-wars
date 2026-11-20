@@ -55,6 +55,18 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **Movement not smooth, blurry while flying, dizzy parallax (Oscar, 2026-11-20):** the picture
+  was drawn only on 60 Hz sim steps, so frames between steps repeated or skipped. It was also
+  stretched to the window by a non-integer factor, which smeared the pixels unevenly as the
+  view moved. Fixed with render interpolation between sim steps (`snapshot`/`blendIn`/`blendOut`
+  in `main.ts`). The canvas is now sized to the screen's real pixels (`setScale`, which includes
+  `devicePixelRatio`), so the browser never resamples it. The top-down camera snaps to whole
+  world pixels and then slides the finished frame by the sub-pixel remainder (`present`), so
+  edges stay crisp but motion is continuous. Parallax is calmer: the drifting cloud layer is
+  gone, stars and nebula sit much further away, and there are fewer, deeper rocks. Frame time
+  at 1920 x 1080 (headless, no GPU): top 20.0 -> 16.9 ms, iso 18.7 -> 13.1 ms, chase 35.5 ->
+  17.8 ms, mostly from removing per-pixel allocations and filtering lights per ship.
+
 - **Ships too pixelated and hard to see, no thrusters, bots too strong (Oscar, 2026-11-19):**
   ships now draw in a detail layer at twice the world's resolution (`drawModelHi`,
   `composite` in `render/raster.ts`) from stacks upsampled with smoothing (`upsample` in

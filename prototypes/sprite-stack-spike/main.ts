@@ -41,7 +41,6 @@ const models = buildModels();
 const R = new Renderer(W, H);
 R.deckCentre = map.centre * TILE;
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
-canvas.width = R.hiW; canvas.height = R.hiH;
 const ctx = canvas.getContext('2d')!;
 
 /** Render space: X = sim x, Y = -sim y, z up. Ships hover at this height between the walls. */
@@ -49,9 +48,17 @@ const SHIP_Z = 10;
 const VOX = 2; // world px per voxel
 const BULLET = [0, 0x9fe4ff, 0xffe27a, 0xff86e0], BOMB = [0, 0xff8a3a, 0xff4fb0, 0xb07dff];
 
+/**
+ * Sizes the canvas to the screen's real pixels: the page is a whole multiple k of the world's
+ * 480 x 270 in CSS pixels, and the canvas holds k x devicePixelRatio pixels per world pixel, so
+ * the browser shows it 1:1 and never stretches (which smears pixel art when it moves).
+ */
 function fit(): void {
   const k = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
-  canvas.style.width = `${W * k}px`; canvas.style.height = `${H * k}px`;
+  R.setScale(Math.min(4, k * (devicePixelRatio || 1)));
+  canvas.width = R.hiW; canvas.height = R.hiH;
+  const css = R.hiW / (devicePixelRatio || 1);
+  canvas.style.width = `${css}px`; canvas.style.height = `${css * H / W}px`;
 }
 addEventListener('resize', fit); fit();
 
@@ -99,7 +106,12 @@ function updateCamera(dt: number, sh: Ship): CameraState {
   // straight down and square to the map, move the camera in whole screen pixels: the walls and
   // stacks then step cleanly instead of their edges crawling between pixels as you fly
   let sx = tx, sy = ty;
-  if (cam.pitch > 1.5 && Math.abs(angTo(cam.yaw, Math.PI / 2)) < 0.01) { const px = 1 / scale; sx = Math.round(tx / px) * px; sy = Math.round(ty / px) * px; }
+  R.shiftX = 0; R.shiftY = 0;
+  if (cam.pitch > 1.5 && Math.abs(angTo(cam.yaw, Math.PI / 2)) < 0.01) {
+    const px = 1 / scale; sx = Math.round(tx / px) * px; sy = Math.round(ty / px) * px;
+    // ...and slide the finished picture by the remainder, in the screen's own pixels
+    R.shiftX = Math.round((tx - sx) * scale * R.F); R.shiftY = Math.round(-(ty - sy) * scale * R.F);
+  }
   return { tx: sx, ty: sy, tz, yaw: cam.yaw, pitch: cam.pitch, dist, scale };
 }
 
@@ -168,8 +180,9 @@ function effects(): void {
 }
 
 // ---- drawing a frame ----------------------------------------------------------------------------
-const rocks = Array.from({ length: 260 }, (_, i) => ({
-  x: rnd() * world.size, y: -rnd() * world.size, z: -90 - rnd() * 240, m: `rock${i % 5}`,
+// a few rocks, all deep down at about the same depth: one slow layer, not many fast ones
+const rocks = Array.from({ length: 110 }, (_, i) => ({
+  x: rnd() * world.size, y: -rnd() * world.size, z: -300 - rnd() * 60, m: `rock${i % 5}`,
   yaw: rnd() * 6.28, spin: (rnd() - 0.5) * 0.12, tilt: rnd() * 6.28,
 }));
 
@@ -353,6 +366,38 @@ function stackPanel(time: number): void {
 }
 
 // ---- the loop -----------------------------------------------------------------------------------
+// ---- smooth motion: draw between the last two game steps ------------------------------------
+// The rules step 60 times a second; screens refresh at 60, 120, 144 Hz or stutter below. Drawing
+// the ships and shots part way between their last two positions makes motion glide on any of them.
+const prevShip = new Map<number, [number, number, number]>(), prevShot = new Map<object, [number, number]>();
+function snapshot(): void {
+  for (const sh of world.ships) prevShip.set(sh.id, [sh.x, sh.y, sh.a]);
+  prevShot.clear();
+  for (const s of world.shots) prevShot.set(s, [s.x, s.y]);
+}
+const saved: number[] = [];
+/** Moves everything to where it is `t` of the way from the last step to this one (for drawing only). */
+function blendIn(t: number): void {
+  saved.length = 0;
+  for (const sh of world.ships) {
+    saved.push(sh.x, sh.y, sh.a);
+    const p = prevShip.get(sh.id);
+    if (!p || Math.hypot(sh.x - p[0], sh.y - p[1]) > 80) continue; // a relaunch: no gliding
+    sh.x = p[0] + (sh.x - p[0]) * t; sh.y = p[1] + (sh.y - p[1]) * t; sh.a = p[2] + angTo(p[2], sh.a) * t;
+  }
+  for (const s of world.shots) {
+    saved.push(s.x, s.y);
+    const p = prevShot.get(s);
+    if (p) { s.x = p[0] + (s.x - p[0]) * t; s.y = p[1] + (s.y - p[1]) * t; }
+  }
+}
+/** Puts everything back where the rules left it. */
+function blendOut(): void {
+  let i = 0;
+  for (const sh of world.ships) { sh.x = saved[i++]; sh.y = saved[i++]; sh.a = saved[i++]; }
+  for (const s of world.shots) { s.x = saved[i++]; s.y = saved[i++]; }
+}
+
 let acc = 0, last = performance.now(), fps = 60, simTime = 0, frames = 0;
 const warm = Number(params.get('warm') ?? 0); // seconds of zone to run before the first frame
 for (let i = 0; i < warm / STEP; i++) { simStep(world, new Map(), tune, STEP); world.events.length = 0; }
@@ -364,12 +409,15 @@ function frame(now: number): void {
   acc += dt;
   const input = readInput();
   while (acc >= STEP) {
+    snapshot();
     simStep(world, new Map([[ME, input]]), tune, STEP);
     effects();
     world.events.length = 0;
     acc -= STEP; simTime += STEP;
   }
+  blendIn(acc / STEP);
   render(dt);
+  blendOut();
   frames++;
   requestAnimationFrame(frame);
 }
@@ -378,7 +426,7 @@ function render(dt: number): void {
   if (showHud) hud(fps);
   if (showStack) stackPanel(simTime);
   R.composite(lastLights);
-  ctx.putImageData(R.hiImage, 0, 0);
+  ctx.putImageData(R.present(), 0, 0);
 }
 
 /** What a check (Playwright) can drive: views, steps and frames without the clock. */

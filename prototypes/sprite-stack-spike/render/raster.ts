@@ -49,12 +49,27 @@ export class Renderer {
   /** Seconds, for animated surfaces. */
   time = 0;
   stats = { quads: 0, voxels: 0, lights: 0 };
-  /** Detail factor of the ship layer: ships are drawn at F times the world's resolution. */
-  readonly F = 2;
-  readonly hiW: number; readonly hiH: number;
-  readonly hiDepth: Float32Array; readonly hiAlb: Uint32Array; readonly hiSun: Float32Array;
-  readonly hiFlag: Uint8Array; readonly hiObj: Uint16Array;
-  readonly hiImage: ImageData; readonly hiOut: Uint32Array;
+  /**
+   * Output scale: the final picture is F times the world's resolution, matched to the screen's
+   * real pixels so the browser never stretches it. Ships are drawn at this full detail.
+   */
+  F = 2;
+  hiW = 0; hiH = 0;
+  hiDepth = new Float32Array(0); hiAlb = new Uint32Array(0); hiSun = new Float32Array(0);
+  hiFlag = new Uint8Array(0); hiObj = new Uint16Array(0);
+  hiImage!: ImageData; hiOut = new Uint32Array(0);
+  /** Detail column -> world column, and detail row -> world row start. */
+  private lowX = new Int32Array(0); private lowRow = new Int32Array(0);
+  /**
+   * Sub-pixel camera offset, in output pixels: the world is drawn with the camera snapped to
+   * whole world pixels (so edges never crawl), then the finished picture is slid by this much,
+   * so motion stays smooth at the screen's full resolution.
+   */
+  shiftX = 0; shiftY = 0;
+  /** The picture to put on screen (the composite, slid by the shift). */
+  finalImage!: ImageData; private finalOut = new Uint32Array(0);
+  /** Screen rectangles the ships were drawn into this frame: x0, y0, x1, y1 (inclusive). */
+  private rects: number[] = [];
   /** The HUD, at world resolution: 0 = see-through. Drawn over everything at the end. */
   readonly hud: Uint32Array;
   private flames: number[] = [];
@@ -66,13 +81,25 @@ export class Renderer {
     this.accR = new Float32Array(n); this.accG = new Float32Array(n); this.accB = new Float32Array(n);
     this.image = new ImageData(W, H);
     this.out = new Uint32Array(this.image.data.buffer);
-    this.hiW = W * this.F; this.hiH = H * this.F;
+    this.hud = new Uint32Array(n);
+    this.setScale(2);
+  }
+
+  /** Sets the output scale (whole numbers, 1..4) and sizes the detail buffers for it. */
+  setScale(F: number): void {
+    F = Math.max(1, Math.min(4, Math.round(F)));
+    if (F === this.F && this.hiW) return;
+    this.F = F; this.hiW = this.W * F; this.hiH = this.H * F;
     const m = this.hiW * this.hiH;
-    this.hiDepth = new Float32Array(m); this.hiAlb = new Uint32Array(m); this.hiSun = new Float32Array(m);
+    this.hiDepth = new Float32Array(m).fill(Infinity); this.hiAlb = new Uint32Array(m); this.hiSun = new Float32Array(m);
     this.hiFlag = new Uint8Array(m); this.hiObj = new Uint16Array(m);
     this.hiImage = new ImageData(this.hiW, this.hiH);
     this.hiOut = new Uint32Array(this.hiImage.data.buffer);
-    this.hud = new Uint32Array(n);
+    this.finalImage = new ImageData(this.hiW, this.hiH);
+    this.finalOut = new Uint32Array(this.finalImage.data.buffer);
+    this.lowX = Int32Array.from({ length: this.hiW }, (_, x) => Math.floor(x / F));
+    this.lowRow = Int32Array.from({ length: this.hiH }, (_, y) => Math.floor(y / F) * this.W);
+    this.rects.length = 0;
   }
 
   /** Sets the camera for this frame. */
@@ -94,7 +121,14 @@ export class Renderer {
   begin(time: number): void {
     this.time = time;
     this.depth.fill(Infinity); this.flags.fill(0); this.obj.fill(0);
-    this.hiDepth.fill(Infinity); this.hiFlag.fill(0); this.hiObj.fill(0); this.hud.fill(0);
+    // the detail layer is only ever written near ships: clear just those rectangles
+    const r = this.rects, W2 = this.hiW;
+    for (let i = 0; i < r.length; i += 4) for (let y = r[i + 1]; y <= r[i + 3]; y++) {
+      const a = y * W2 + r[i], b = y * W2 + r[i + 2] + 1;
+      this.hiDepth.fill(Infinity, a, b); this.hiFlag.fill(0, a, b); this.hiObj.fill(0, a, b);
+    }
+    r.length = 0;
+    this.hud.fill(0);
     this.flames.length = 0;
     this.stats.quads = 0; this.stats.voxels = 0; this.stats.lights = 0;
   }
@@ -301,7 +335,7 @@ export class Renderer {
    * hidden by anything nearer in the world layer. `scale` is world px per voxel of this model.
    */
   drawModelHi(m: Model, x: number, y: number, z: number, yaw: number, scale: number, id: number, roll = 0, flash = 0): void {
-    const F = this.F, W = this.hiW, H = this.hiH, LW = this.W;
+    const F = this.F, W = this.hiW, H = this.hiH;
     const cyw = Math.cos(yaw), syw = Math.sin(yaw), cr = Math.cos(roll), sr = Math.sin(roll);
     const r00 = cyw, r01 = -syw * cr, r02 = syw * sr;
     const r10 = syw, r11 = cyw * cr, r12 = -cyw * sr;
@@ -320,7 +354,8 @@ export class Renderer {
     const lx = r00 * L[0] + r10 * L[1] + r20 * L[2], ly = r01 * L[0] + r11 * L[1] + r21 * L[2], lz = r02 * L[0] + r12 * L[1] + r22 * L[2];
     const lod = m.lods[k0 * scale < 0.75 && m.lods.length > 1 ? 1 : 0];
     const unit = lod.unit * scale * 1.04, hw = W / 2, hh = H / 2;
-    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, depth } = this;
+    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, depth, lowX, lowRow } = this;
+    let rx0 = W, ry0 = H, rx1 = -1, ry1 = -1;
     for (let i = 0; i < lod.n; i++) {
       const vx = lod.x[i], vy = lod.y[i], vz = lod.z[i];
       const zc = oz + vx * az + vy * bz + vz * cz;
@@ -334,16 +369,19 @@ export class Renderer {
       const d = lod.nx[i] * lx + lod.ny[i] * ly + lod.nz[i] * lz;
       const sh = emit ? 0 : Math.max(0, (d + 0.35) / 1.35);
       const col = flash > 0 ? mixRgb(lod.col[i], 0xffffff, flash) : lod.col[i];
-      const x1 = Math.min(W, xa + side), y1 = Math.min(H, ya + side), xs = Math.max(0, xa);
-      for (let yy = Math.max(0, ya); yy < y1; yy++) {
+      const x1 = Math.min(W, xa + side), y1 = Math.min(H, ya + side), xs = Math.max(0, xa), ys = Math.max(0, ya);
+      if (xs < rx0) rx0 = xs; if (ys < ry0) ry0 = ys; if (x1 - 1 > rx1) rx1 = x1 - 1; if (y1 - 1 > ry1) ry1 = y1 - 1;
+      for (let yy = ys; yy < y1; yy++) {
         let p = yy * W + xs;
-        const lrow = (yy >> 1) * LW;
+        const lrow = lowRow[yy];
         for (let xx = xs; xx < x1; xx++, p++) {
-          if (zc >= hiDepth[p] || zc >= depth[lrow + (xx >> 1)]) continue;
+          if (zc >= hiDepth[p] || zc >= depth[lrow + lowX[xx]]) continue;
           hiDepth[p] = zc; hiAlb[p] = col; hiSun[p] = sh; hiFlag[p] = emit ? 2 : 1; hiObj[p] = id;
         }
       }
     }
+    // remember where this ship went (one pixel of margin for its outline)
+    if (rx1 >= 0) this.rects.push(Math.max(0, rx0 - 1), Math.max(0, ry0 - 1), Math.min(W - 1, rx1 + 1), Math.min(H - 1, ry1 + 1));
     this.stats.voxels += lod.n;
   }
 
@@ -355,25 +393,43 @@ export class Renderer {
    * same point lights), a thin soft outline round each ship, the flames, then the HUD.
    */
   composite(lights: Light[]): void {
-    const F = this.F, W = this.hiW, H = this.hiH, LW = this.W, f = this.focal * F, hw = W / 2, hh = H / 2;
-    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, hiOut, out, hud } = this;
+    const F = this.F, W = this.hiW, H = this.hiH, LW = this.W, LH = this.H, f = this.focal * F, hw = W / 2, hh = H / 2;
+    const { hiDepth, hiAlb, hiSun, hiFlag, hiObj, hiOut, out, hud, lowX, lowRow } = this;
+    // 1. the world, scaled up by whole pixels: widen each row once, then copy it down
+    for (let ly = 0; ly < LH; ly++) {
+      const row0 = ly * F * W, src = ly * LW;
+      let p = row0;
+      for (let lx = 0; lx < LW; lx++) { const v = out[src + lx]; for (let k = 0; k < F; k++) hiOut[p++] = v; }
+      for (let r = 1; r < F; r++) hiOut.copyWithin(row0 + r * W, row0, row0 + W);
+    }
+    // 2. ships, lit by the sun and the same point lights, only inside the rectangles they used
     const amb = [0.32, 0.34, 0.44], sunc = [0.82, 0.8, 0.74];
-    const fogStart = this.camDist + 250, fogLen = 900;
-    for (let y = 0; y < H; y++) {
-      const lrow = (y >> 1) * LW, b = -(y + 0.5 - hh) / f;
-      for (let x = 0; x < W; x++) {
+    const fogStart = this.camDist + 250, fogLen = 900, R = this.rects;
+    const near: Light[] = [];
+    for (let ri = 0; ri < R.length; ri += 4) {
+      // only the lights whose reach overlaps this ship on screen
+      near.length = 0;
+      for (const l of lights) {
+        const p = this.project(l.x, l.y, l.z);
+        if (!p) continue;
+        const sx = p[0] * F, sy = p[1] * F, rr = (l.r * f) / p[2];
+        if (sx + rr >= R[ri] && sx - rr <= R[ri + 2] && sy + rr >= R[ri + 1] && sy - rr <= R[ri + 3]) near.push(l);
+      }
+      for (let y = R[ri + 1]; y <= R[ri + 3]; y++) {
+      const b = -(y + 0.5 - hh) / f;
+      for (let x = R[ri]; x <= R[ri + 2]; x++) {
         const p = y * W + x, fl = hiFlag[p];
-        if (!fl) { hiOut[p] = out[lrow + (x >> 1)]; continue; }
+        if (fl !== 1 && fl !== 2) continue;
+        hiFlag[p] = fl | 4; // done (rectangles can overlap)
         const c = hiAlb[p];
         let r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
         if (fl === 1) {
           const s = hiSun[p];
           let lr = amb[0] + sunc[0] * s, lg = amb[1] + sunc[1] * s, lb = amb[2] + sunc[2] * s;
-          // point lights on the hull
           const z = hiDepth[p], a = (x + 0.5 - hw) / f;
           const wx = this.cx + (this.fx + this.rx * a + this.ux * b) * z, wy = this.cy + (this.fy + this.ry * a + this.uy * b) * z, wz = this.cz + (this.fz + this.uz * b) * z;
-          for (let i = 0; i < lights.length; i++) {
-            const l = lights[i], dx = wx - l.x, dy = wy - l.y, dz = wz - l.z, d2 = dx * dx + dy * dy + dz * dz;
+          for (let i = 0; i < near.length; i++) {
+            const l = near[i], dx = wx - l.x, dy = wy - l.y, dz = wz - l.z, d2 = dx * dx + dy * dy + dz * dz;
             if (d2 >= l.r * l.r) continue;
             const att = 1 - Math.sqrt(d2) / l.r, gk = att * att * 1.2;
             lr += l.cr * gk; lg += l.cg * gk; lb += l.cb * gk;
@@ -384,19 +440,21 @@ export class Renderer {
         if (fog > 0) { const k = 1 - fog * fog * (3 - 2 * fog); r *= k; g = g * k + 6 * (1 - k); bl = bl * k + 14 * (1 - k); }
         hiOut[p] = 0xff000000 | (clamp255(bl) << 16) | (clamp255(g) << 8) | clamp255(r);
       }
+      }
     }
-    // a thin, soft outline: one detail pixel, darkening what is behind rather than painting black
-    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-      const p = y * W + x, me = hiObj[p];
-      if (me) continue;
-      let edge = false;
-      for (const q of [p - 1, p + 1, p - W, p + W]) if (hiObj[q]) { edge = true; break; }
-      if (!edge) continue;
-      const c = hiOut[p];
-      hiOut[p] = 0xff000000 | ((((c >> 16) & 255) * 0.35) << 16) | ((((c >> 8) & 255) * 0.35) << 8) | ((c & 255) * 0.35 + 10);
+    // 3. a thin soft outline: one detail pixel round each ship, darkening what is behind it
+    for (let ri = 0; ri < R.length; ri += 4) for (let y = Math.max(1, R[ri + 1]); y <= Math.min(H - 2, R[ri + 3]); y++) {
+      for (let x = Math.max(1, R[ri]); x <= Math.min(W - 2, R[ri + 2]); x++) {
+        const p = y * W + x;
+        if (hiObj[p] || hiFlag[p] & 8) continue;
+        if (!(hiObj[p - 1] || hiObj[p + 1] || hiObj[p - W] || hiObj[p + W])) continue;
+        hiFlag[p] |= 8;
+        const c = hiOut[p];
+        hiOut[p] = 0xff000000 | ((((c >> 16) & 255) * 0.35) << 16) | ((((c >> 8) & 255) * 0.35) << 8) | ((c & 255) * 0.35 + 10);
+      }
     }
-    // flames: soft additive light, hidden only by what is clearly in front of them
-    const fl = this.flames;
+    // 4. flames: soft additive light, hidden only by what is clearly in front of them
+    const fl = this.flames, depth = this.depth;
     for (let i = 0; i < fl.length; i += 7) {
       const px = fl[i] - this.cx, py = fl[i + 1] - this.cy, pz = fl[i + 2] - this.cz;
       const zc = px * this.fx + py * this.fy + pz * this.fz;
@@ -406,19 +464,33 @@ export class Renderer {
       const xa = Math.max(0, Math.floor(sx - rad)), xb = Math.min(W - 1, Math.ceil(sx + rad));
       const ya = Math.max(0, Math.floor(sy - rad)), yb = Math.min(H - 1, Math.ceil(sy + rad));
       for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) {
-        const d = Math.hypot(x + 0.5 - sx, y + 0.5 - sy) / rad;
+        const ex = x + 0.5 - sx, ey = y + 0.5 - sy, d = Math.sqrt(ex * ex + ey * ey) / rad;
         if (d >= 1) continue;
-        const p = y * W + x, front = Math.min(hiDepth[p], this.depth[(y >> 1) * LW + (x >> 1)]);
+        const p = y * W + x, front = Math.min(hiDepth[p], depth[lowRow[y] + lowX[x]]);
         if (front < zc - 6) continue;
         const g = (1 - d) * (1 - d) * 255, c = hiOut[p];
         hiOut[p] = 0xff000000 | (clamp255(((c >> 16) & 255) + g * cb) << 16) | (clamp255(((c >> 8) & 255) + g * cg) << 8) | clamp255((c & 255) + g * cr);
       }
     }
-    // the HUD on top, each HUD pixel F x F
-    for (let y = 0; y < H; y++) {
-      const lrow = (y >> 1) * LW;
-      for (let x = 0; x < W; x++) { const h = hud[lrow + (x >> 1)]; if (h) hiOut[y * W + x] = h; }
+    // 5. the HUD on top, each HUD pixel F x F
+    for (let ly = 0; ly < LH; ly++) for (let lx = 0; lx < LW; lx++) {
+      const h = hud[ly * LW + lx];
+      if (!h) continue;
+      for (let dy = 0; dy < F; dy++) hiOut.fill(h, (ly * F + dy) * W + lx * F, (ly * F + dy) * W + lx * F + F);
     }
+  }
+
+  /** Slides the composite by the sub-pixel shift into the final picture (edges repeat). */
+  present(): ImageData {
+    const ox = this.shiftX | 0, oy = this.shiftY | 0;
+    if (!ox && !oy) return this.hiImage;
+    const W = this.hiW, H = this.hiH, src = this.hiOut, dst = this.finalOut;
+    for (let y = 0; y < H; y++) {
+      const sy = Math.min(H - 1, Math.max(0, y + oy)), s0 = sy * W, d0 = y * W;
+      if (ox >= 0) { dst.set(src.subarray(s0 + ox, s0 + W), d0); dst.fill(src[s0 + W - 1], d0 + W - ox, d0 + W); }
+      else { dst.set(src.subarray(s0, s0 + W + ox), d0 - ox); dst.fill(src[s0], d0, d0 - ox); }
+    }
+    return this.finalImage;
   }
 
   // ---- lighting and the picture -----------------------------------------------------------------
@@ -445,7 +517,7 @@ export class Renderer {
           const i = y * W + x, a = (x + 0.5 - hw) / f;
           // halo: a soft disc on screen, in front of whatever is behind the light
           if (hr > 0) {
-            const ds = Math.hypot(x + 0.5 - lsx, y + 0.5 - lsy) / hr;
+            const ex = x + 0.5 - lsx, ey = y + 0.5 - lsy, ds = Math.sqrt(ex * ex + ey * ey) / hr;
             if (ds < 1 && depth[i] > lz - 6) { const g = (1 - ds) * (1 - ds) * 0.9; accR[i] += l.cr * g; accG[i] += l.cg * g; accB[i] += l.cb * g; }
           }
           const z = depth[i];
@@ -463,7 +535,7 @@ export class Renderer {
 
     const amb = [0.2, 0.23, 0.34], sunc = [0.95, 0.9, 0.82];
     const t = this.time, fogStart = this.camDist + 250, fogLen = 900;
-    const cloudZ = -150, nebZ = -520, starLo = -1800, starHi = 1800;
+    const nebZ = -2600, starLo = -6000, starHi = 6000; // far away, so they drift slowly
     const ditherAmp = opt.dither ? 10 : 0;
     for (let y = 0; y < H; y++) {
       const b = -(y + 0.5 - hh) / f;
@@ -473,7 +545,7 @@ export class Renderer {
         const z = depth[i];
         let r: number, g: number, bl: number;
         if (z === Infinity) {
-          [r, g, bl] = this.background(dx, dy, dz, t, starLo, starHi, nebZ, f);
+          this.background(dx, dy, dz, t, starLo, starHi, nebZ, f); r = this.bgR; g = this.bgG; bl = this.bgB;
         } else {
           const fl = flags[i];
           let c = albedo[i];
@@ -493,19 +565,6 @@ export class Renderer {
         }
         // halos on top of empty space too
         if (z === Infinity) { r += accR[i] * 150; g += accG[i] * 150; bl += accB[i] * 150; }
-        // drifting nebula wisps between the deck and the deep: only where the ray reaches them
-        if (dz < -1e-4) {
-          const tc = (cloudZ - this.cz) / dz;
-          if (tc > 0 && tc < z) {
-            const u = (this.cx + dx * tc) * 0.0045 + t * 0.012, v = (this.cy + dy * tc) * 0.0045 + t * 0.004;
-            const d = sampleSmooth(this.cloud, 256, u, v);
-            if (d > 0.55) {
-              // a soft, faint veil (no dither: a screen-fixed dither crawls when the camera moves)
-              const alpha = Math.min(0.18, (d - 0.55) * 0.9) * Math.min(1, tc / 220);
-              r += (34 - r) * alpha; g += (30 - g) * alpha; bl += (58 - bl) * alpha;
-            }
-          }
-        }
         // the safe zone's deck: a see-through green grid plane just under the ships
         if (dz < -1e-4) {
           const td = (DECK_Z - this.cz) / dz;
@@ -532,15 +591,16 @@ export class Renderer {
   }
 
   /** Stars on two far planes (below and above, so every view has them) and the nebula floor. */
-  private background(dx: number, dy: number, dz: number, t: number, lo: number, hi: number, nebZ: number, f: number): [number, number, number] {
+  private bgR = 0; private bgG = 0; private bgB = 0;
+  private background(dx: number, dy: number, dz: number, _t: number, lo: number, hi: number, nebZ: number, f: number): void {
     let r = 4, g = 6, b = 14;
     // nebula floor far below, coloured by a second noise
     if (dz < -1e-4) {
       const tn = (nebZ - this.cz) / dz;
-      const u = (this.cx + dx * tn) * 0.0008, v = (this.cy + dy * tn) * 0.0008;
-      const d = sampleSmooth(this.cloud, 256, u, v), mixv = sampleSmooth(this.tint, 128, u * 0.6, v * 0.6);
+      const u = (this.cx + dx * tn) * 0.0002, v = (this.cy + dy * tn) * 0.0002;
+      const d = sampleSmooth(this.cloud, 256, u, v), mixv = sample(this.tint, 128, u * 0.6, v * 0.6);
       // a dim, smooth glow far below: depth without noise competing with the ships
-      const k = Math.max(0, d - 0.45) * 0.55 * Math.min(1, 900 / tn);
+      const k = Math.max(0, d - 0.45) * 0.5 * Math.min(1, 4000 / tn);
       r += k * (40 + 50 * mixv); g += k * (24 + 40 * (1 - mixv)); b += k * (80 + 30 * mixv);
     }
     const zp = dz < 0 ? lo : hi;
@@ -551,12 +611,12 @@ export class Renderer {
         const gx = Math.floor(px / G), gy = Math.floor(py / G), h = hash2(gx, gy, 77);
         // keep the same stars per screen pixel at any angle: a grazing plane packs many cells
         // into a pixel, so the chance a cell holds a star shrinks with its screen footprint
-        const nz = Math.abs(dz) / Math.hypot(dx, dy, dz), cellPx = (G * f) / ts;
+        const nz = Math.abs(dz) / Math.sqrt(dx * dx + dy * dy + dz * dz), cellPx = (G * f) / ts;
         const pStar = Math.min(0.12, (cellPx * cellPx * nz) / 520);
         if (h < pStar) {
           const sx = (gx + hash2(gx, gy, 78)) * G, sy = (gy + hash2(gx, gy, 79)) * G;
           const pixel = ts / f; // world px per screen pixel on that plane
-          const dd = Math.hypot(px - sx, py - sy) / pixel;
+          const ex = px - sx, ey = py - sy, dd = Math.sqrt(ex * ex + ey * ey) / pixel;
           const big = h < pStar * 0.06 ? 1.3 : 0.62;
           if (dd < big) {
             const tw = 0.55; // steady: twinkling single pixels read as flicker
@@ -566,7 +626,7 @@ export class Renderer {
         }
       }
     }
-    return [r, g, b];
+    this.bgR = r; this.bgG = g; this.bgB = b;
   }
 
   /** Wall tops: blue steel plates, a seam grid every two tiles, rivets, lit and shadowed rims. */
@@ -605,8 +665,8 @@ export class Renderer {
     const { W, H, obj, depth, flags, out } = this;
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
       const i = y * W + x, me = obj[i], dz = depth[i];
-      for (const j of [i - 1, i + 1, i - W, i + W]) {
-        const o = obj[j];
+      for (let n = 0; n < 4; n++) {
+        const j = n === 0 ? i - 1 : n === 1 ? i + 1 : n === 2 ? i - W : i + W, o = obj[j];
         if (o && o !== me && flags[j] & F_OBJ && depth[j] < dz - 4) { out[i] = INK; break; }
       }
     }
