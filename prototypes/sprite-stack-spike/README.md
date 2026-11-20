@@ -20,7 +20,7 @@ npm run proto:stack:build    # one self-contained file: prototypes/sprite-stack-
 
 Controls are the game's: arrows or WASD fly, Shift burns, Space guns, F bomb, E mine.
 **1 / 2 / 3** pick top-down / isometric / third-person (**C** cycles), drag to turn the top and
-iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **O** outlines,
+iso views, **mouse wheel** or **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **O** outlines,
 **P** palette snapping, **G** dithering, **I** frame stats. URL flags: `?bot` (a bot flies your ship), `?view=iso`,
 `?seed=7`, `?stack`, `?manual` (no clock; checks drive `window.proto`).
 
@@ -54,6 +54,13 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
   instead of going through walls.
 
 ## Findings so far
+
+- **Should feel more zoomed out (Oscar, 2026-11-20):** the top-down view now shows about 1.8 times
+  as far in each direction (scale 0.5 -> 0.28 world px per screen px at 480 x 270; iso 0.56 -> 0.33),
+  and the top and iso views pull back up to a further 20% as you speed up, slowly, so it never
+  pumps (`?nospeedzoom` turns that off). The mouse wheel (or + / -) zooms from very wide to close.
+  Ships are drawn up to 30% larger when zoomed out so they stay readable (hitboxes unchanged), and
+  the look-ahead reaches 150 px. Frames stay 21-28 ms headless.
 
 - **Still feels like an arena, should feel like an open world (Oscar, 2026-11-20):** the prototype
   now plays on a new shared map style, `'open'` (`src/game/map.ts`, `openLayout`; the main game

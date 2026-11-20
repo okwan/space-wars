@@ -101,12 +101,19 @@ const VIEWS: View[] = ['top', 'iso', 'chase'];
 const VIEW_NAME: Record<View, string> = { top: 'TOP-DOWN', iso: 'ISOMETRIC', chase: 'THIRD-PERSON' };
 let view: View = (VIEWS as string[]).includes(params.get('view') ?? '') ? params.get('view') as View : 'top';
 let isoTurn = 0; // extra yaw the player dialled in for the top and iso views
+const ZOOM_MIN = 0.55, ZOOM_MAX = 2.6;
 let zoom = 1;
+// Wider by default (Oscar, 2026-11-20: "should feel more zoomed out"); the top and iso views also
+// pull back with speed, so a fast run shows more of what is coming. ?nospeedzoom turns that off.
+const TOP_SCALE = 0.28, ISO_SCALE = 0.33, SPEED_OUT = params.has('nospeedzoom') ? 0 : 0.22;
+let speedOut = 0; // 0..1, smoothed share of top speed
+let camScale = TOP_SCALE; // the scale last frame, for sizing ships
+
 interface Cam { yaw: number; pitch: number; logDist: number; logScale: number; lead: number; lift: number }
 function camGoal(sh: Ship): Cam {
   const yawShip = -sh.a;
-  if (view === 'top') return { yaw: Math.PI / 2 + isoTurn, pitch: Math.PI / 2, logDist: Math.log(700), logScale: Math.log(0.5 * zoom), lead: 0, lift: 0 };
-  if (view === 'iso') return { yaw: Math.PI / 2 + Math.PI / 4 + isoTurn, pitch: 0.66, logDist: Math.log(700), logScale: Math.log(0.56 * zoom), lead: 0, lift: 0 };
+  if (view === 'top') return { yaw: Math.PI / 2 + isoTurn, pitch: Math.PI / 2, logDist: Math.log(700), logScale: Math.log(TOP_SCALE * zoom) - SPEED_OUT * speedOut, lead: 0, lift: 0 };
+  if (view === 'iso') return { yaw: Math.PI / 2 + Math.PI / 4 + isoTurn, pitch: 0.66, logDist: Math.log(700), logScale: Math.log(ISO_SCALE * zoom) - SPEED_OUT * speedOut, lead: 0, lift: 0 };
   return { yaw: yawShip, pitch: 0.34, logDist: Math.log(130), logScale: Math.log(1.35 * zoom), lead: 60, lift: 12 };
 }
 let cam: Cam | null = null;
@@ -116,6 +123,10 @@ let aheadX = 0, aheadY = 0;
 const angTo = (a: number, b: number): number => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 
 function updateCamera(dt: number, sh: Ship): CameraState {
+  {
+    const sp = sh.alive ? Math.hypot(sh.vx, sh.vy) : 0, g = Math.max(0, Math.min(1, (sp - 120) / 220));
+    speedOut += (g - speedOut) * (1 - Math.exp(-dt * (g > speedOut ? 0.9 : 0.6))); // slow, so it never pumps
+  }
   const goal = camGoal(sh);
   if (!cam || params.has('snap')) cam = { ...goal };
   // exponential approach: every parameter glides, nothing ever cuts
@@ -129,7 +140,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
   camX = sh.x; camY = -sh.y;
   {
     let gx = sh.vx * 0.28, gy = -sh.vy * 0.28;
-    const gl = Math.hypot(gx, gy); if (gl > 110) { gx *= 110 / gl; gy *= 110 / gl; }
+    const cap = 150, gl = Math.hypot(gx, gy); if (gl > cap) { gx *= cap / gl; gy *= cap / gl; }
     if (!sh.alive) { gx = 0; gy = 0; }
     const ka = 1 - Math.exp(-dt * 2.2);
     aheadX += (gx - aheadX) * ka; aheadY += (gy - aheadY) * ka;
@@ -157,6 +168,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
   }
   const [qx, qy] = ui.shake; // the kill's little shake, in screen pixels
   R.shiftX += Math.round(qx * R.F); R.shiftY += Math.round(qy * R.F);
+  camScale = scale;
   return { tx: sx, ty: sy, tz, yaw: cam.yaw, pitch: cam.pitch, dist, scale };
 }
 
@@ -183,10 +195,11 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyO') opt.outline = !opt.outline;
   if (e.code === 'KeyP') opt.palette = !opt.palette;
   if (e.code === 'KeyG') opt.dither = !opt.dither;
-  if (e.code === 'Equal') zoom = Math.min(2, zoom * 1.25);
-  if (e.code === 'Minus') zoom = Math.max(0.5, zoom / 1.25);
+  if (e.code === 'Equal') zoom = Math.min(ZOOM_MAX, zoom * 1.25);
+  if (e.code === 'Minus') zoom = Math.max(ZOOM_MIN, zoom / 1.25);
 });
 addEventListener('keyup', e => down.delete(e.code));
+canvas.addEventListener('wheel', e => { e.preventDefault(); zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * Math.exp(-e.deltaY * 0.0015))); }, { passive: false });
 addEventListener('blur', () => down.clear());
 let dragX: number | null = null;
 canvas.addEventListener('pointerdown', e => {
@@ -297,14 +310,15 @@ function draw(time: number, dt: number): CameraState {
     }
     bank.set(sh.id, b);
     const rl = b.r;
+    const SK = Math.max(1, Math.min(1.3, Math.sqrt(0.5 / camScale))), V = VOX * SK;
     const side = sh.id === ME ? 0 : 1, m = models.get(`${sh.hull}:${side}`)!;
     const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z; // no bob: a moving voxel grid shimmers
-    R.drawModelHi(m, x, y, z, yaw, VOX / 2, 1000 + sh.id, rl, sh.flash > 0 ? 0.6 : 0);
+    R.drawModelHi(m, x, y, z, yaw, V / 2, 1000 + sh.id, rl, sh.flash > 0 ? 0.6 : 0);
     // thrusters: a soft plume from every nozzle, steady with a slow shimmer, longer on the burner
     const c = Math.cos(yaw), s = Math.sin(yaw);
     const glowCol = side === 0 ? [0.35, 0.75, 1.0] : [1.0, 0.6, 0.25];
     ENGINES[sh.hull].forEach(([ex, ey], n) => {
-      const nx = x + (ex * c - ey * s) * VOX, ny = y + (ex * s + ey * c) * VOX;
+      const nx = x + (ex * c - ey * s) * V, ny = y + (ex * s + ey * c) * V;
       R.glow(nx, ny, z, 2.2, glowCol[0] * 0.5, glowCol[1] * 0.5, glowCol[2] * 0.5); // pilot light, always on
       if (!sh.thrusting) return;
       const L = (sh.burning ? 34 : 22) * (1 + 0.05 * Math.sin(time * 11 + n * 2 + sh.id));
@@ -320,7 +334,7 @@ function draw(time: number, dt: number): CameraState {
       lights.push({ x: x - c * back, y: y - s * back, z: z + 2, r: sh.burning ? 90 : 60, cr: glowCol[0], cg: glowCol[1], cb: glowCol[2], halo: 0 });
     }
     if (sh.shield > 0) {
-      for (let k = 0; k < 20; k++) { const a = (k / 20) * Math.PI * 2 + time; R.drawPoint(x + Math.cos(a) * 22, y + Math.sin(a) * 22, z, 0x6dffb4, 1.6); }
+      for (let k = 0; k < 20; k++) { const a = (k / 20) * Math.PI * 2 + time; R.drawPoint(x + Math.cos(a) * 22 * SK, y + Math.sin(a) * 22 * SK, z, 0x6dffb4, 1.6); }
     }
   }
   aimGuide(me);
@@ -396,7 +410,7 @@ const RADAR = 64, RSTEP = 4; // radar: 64 px square, one px per four tiles
 function hud(fps: number): void {
   const out = R.hud, me = world.ships[ME];
   drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 4, C_BLUE);
-  drawText(out, W, H, `M SOUND ${sfx.muted ? 'OFF' : 'ON'}  H HUD  L STACKS`, 4, 12, C_DIM);
+  drawText(out, W, H, `M SOUND ${sfx.muted ? 'OFF' : 'ON'}  H HUD  WHEEL ZOOM`, 4, 12, C_DIM);
   drawText(out, W, H, openWorld ? 'HOLD TAB FOR THE MAP' : 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
   if (openWorld) drawText(out, W, H, `IN ${hereName}`, 4, 28, abgr(hereColour));
   if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 36, C_DIM);
@@ -615,6 +629,7 @@ function render(dt: number): void {
   locked() { return ui.lockId; },
   showTips(on: boolean) { ui.tips = on; },
   regions: map.regions,
+  get camScale() { return camScale; },
   aim() { return ui.aimPts; },
   hold(code: string, on: boolean) { if (on) down.add(code); else down.delete(code); },
   set(o: Partial<typeof opt>) { Object.assign(opt, o); },
