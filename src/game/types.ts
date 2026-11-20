@@ -80,10 +80,15 @@ export type GameEvent =
   | { type: 'salvage'; ship: number; kind: Upgrade; level: number };
 
 /** The whole zone. Everything the rules need, nothing the screen needs. */
+/** How the zone's map is laid out: the walled arena, or a wide open world of named regions. */
+export type MapStyle = 'arena' | 'open';
+
 export interface World {
   seed: number; // the rng's running state
   /** The map: its seed and its size in tiles; `size` is the same in px. */
   mapSeed: number; tiles: number; size: number;
+  /** The map's layout; absent means the arena. */
+  mapStyle?: MapStyle;
   t: number;
   ships: Ship[]; shots: Shot[]; mines: Mine[];
   salvage: Salvage[]; nextSalvage: number; salvageClock: number;

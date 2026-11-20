@@ -27,7 +27,7 @@ export const TOP = 0, SIDE_N = 1, SIDE_S = 2, SIDE_E = 3, SIDE_W = 4, DECK = 5;
 export interface Chunk { cx: number; cy: number; verts: Float32Array; kinds: Uint8Array; n: number }
 
 /** Per-tile edge bits for the surface patterns: open to the north, south, west, east; deep inside. */
-export const OPEN_N = 1, OPEN_S = 2, OPEN_W = 4, OPEN_E = 8, DEEP = 16;
+export const OPEN_N = 1, OPEN_S = 2, OPEN_W = 4, OPEN_E = 8, DEEP = 16, METAL = 32;
 
 export interface WallMesh { chunks: Chunk[]; per: number; info: Uint8Array; n: number }
 
@@ -123,6 +123,7 @@ export function buildWalls(m: ZoneMap): WallMesh {
     if (topAt(tx - 1, ty) < t - 6) v |= OPEN_W;
     if (topAt(tx + 1, ty) < t - 6) v |= OPEN_E;
     if (dist[ty * n + tx] >= 3) v |= DEEP;
+    if (m.regions.some(g => g.kind === 'derelict' && Math.hypot(tx - g.x, ty - g.y) <= g.r)) v |= METAL; // derelict rings are steel
     info[ty * n + tx] = v;
   }
   return { chunks, per, info, n };

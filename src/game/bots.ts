@@ -47,7 +47,7 @@ export function think(w: World, sh: Ship, tune: Tuning, dt: number): void {
     b.aimA = sh.a + Math.PI * (0.6 + rand(w) * 0.8); b.wantThrust = true; b.wantRev = false; b.path = []; b.goalX = 0; b.goalY = 0;
     b.stuck = 0; b.think = 0.5; return;
   }
-  const m = zoneMap(w.mapSeed, w.tiles), size = w.size;
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle), size = w.size;
   const tg = b.target >= 0 ? w.ships[b.target] : undefined;
   const maxE = maxEnergy(sh, tune), low = sh.energy < maxE * tune.bot_retreat_energy;
   if (tg && tg.alive && b.wantFire) { // lead the target: aim where it will be when the shot gets there

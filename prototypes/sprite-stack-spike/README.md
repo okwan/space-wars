@@ -55,6 +55,19 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **Still feels like an arena, should feel like an open world (Oscar, 2026-11-20):** the prototype
+  now plays on a new shared map style, `'open'` (`src/game/map.ts`, `openLayout`; the main game
+  keeps `'arena'`, and `?arena` brings it back here). The zone is 1024 x 1024 tiles (16,384 px,
+  four times the area) with long empty stretches between named places: a small hub (HAVEN), about
+  a dozen asteroid fields, five derelict stations (steel rings with gaps, the old outposts), five
+  coloured nebulae (looks only) and a rocky belt that thickens towards the rim, so the edge reads
+  as a region, not a wall. Same seed, same map (`tests/unit/map.test.ts`, which also checks a
+  route from the hub to the farthest derelict).
+  - Entering a place shows its name ("ASTEROID FIELD / MOTH FIELD"), the HUD says where you are,
+    and holding **Tab** opens a zone map with every region, ships and salvage.
+  - More salvage and 18 pilots, with fewer bots kept near you, so players spread out.
+  - Cost: load 1.2 s, frames 21-28 ms headless. Planets are culled per frame and per pixel.
+
 - **The map feels like a box, not space; movement must be race-smooth (Oscar, 2026-11-20):**
   render-only, so collision and the map's layout are unchanged.
   - Walls are drawn as rocky floating islands instead of steel slabs (`render/walls.ts`): each
@@ -68,9 +81,7 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
     parallax layers.
   - Racing: the top and iso cameras look ahead along your velocity (up to 110 px, smoothed),
     so you see more of where you are going at speed.
-  - Still to do: the layout itself is rectangles (rooms, blocks, baffles from
-    `src/game/map.ts`). Organic, sparser layouts mean changing the shared map generator, which
-    also drives bot navigation, so that is a separate decision.
+  - The rectangular layout was replaced by the open map in the next round (above).
 
 - **Ships should tilt when turning; how does health come back? (Oscar, 2026-11-20):** ships now
   bank up to about 45 degrees on a soft spring that follows how fast they are really turning

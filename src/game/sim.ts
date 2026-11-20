@@ -92,7 +92,7 @@ function dropMine(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
 
 /** Can this ship be hurt right now? Not while spawn-shielded or inside the safe zone. */
 export function exposed(w: World, sh: Ship): boolean {
-  return sh.alive && sh.shield <= 0 && !inSafe(zoneMap(w.mapSeed, w.tiles), sh.x, sh.y);
+  return sh.alive && sh.shield <= 0 && !inSafe(zoneMap(w.mapSeed, w.tiles, w.mapStyle), sh.x, sh.y);
 }
 
 /** Takes energy from a ship; at zero it is destroyed. Exposed for tests. */
@@ -134,7 +134,7 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
     if (sh.respawn <= 0) launch(w, sh, tune);
     return;
   }
-  const m = zoneMap(w.mapSeed, w.tiles);
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle);
   const turn = turnRate(sh, tune);
   if (c.left) sh.a -= turn * dt;
   if (c.right) sh.a += turn * dt;
@@ -173,7 +173,7 @@ export function sweptHit(ax: number, ay: number, bx: number, by: number, cx: num
 }
 
 function updateShots(w: World, tune: Tuning, dt: number): void {
-  const m = zoneMap(w.mapSeed, w.tiles), size = w.size;
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle), size = w.size;
   const done = (b: Shot) => {
     b.life = 0;
     if (b.kind === 'bomb') blast(w, b.x, b.y, b.level, b.owner, tune);

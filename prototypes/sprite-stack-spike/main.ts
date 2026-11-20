@@ -7,7 +7,7 @@
 // mines and salvage) runs unchanged. Only the picture is new.
 
 import config from '../../data/config.json';
-import { SAFE, TILE, WALL, tileAt, zoneMap } from '../../src/game/map';
+import { SAFE, TILE, WALL, tileAt, zoneMap, type Region } from '../../src/game/map';
 import { STEP, step as simStep } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
 import { inSafe } from '../../src/game/map';
@@ -40,10 +40,16 @@ if (!params.has('classic')) Object.assign(tune, {
   gun_speed: 780, gun_life: 1.05, gun_reach: 6, gun_damage: 220, gun_damage_level: 80,
   dart_turn: 5.4, lancer_turn: 4.7, bulwark_turn: 4.0,
 });
+// The open world (Oscar: "should almost feel like open world"): a map four times the arena's area,
+// made of named regions with long empty stretches between them. ?arena restores the arena map.
+const openWorld = !params.has('arena');
+if (openWorld) Object.assign(tune, {
+  map_tiles: 1024, salvage_max: 220, salvage_rate: tune.salvage_rate * 2.5, bot_company_share: 0.3, pilots: 18,
+});
 const seed = Number(params.get('seed') ?? config.seed);
-const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0] });
+const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0], mapStyle: openWorld ? 'open' : 'arena' });
 const ME = 0;
-const map = zoneMap(world.mapSeed, world.tiles);
+const map = zoneMap(world.mapSeed, world.tiles, world.mapStyle);
 const mesh = buildWalls(map);
 const models = buildModels();
 
@@ -52,10 +58,14 @@ R.deckCentre = map.centre * TILE;
 // a few far planets, deep below the zone (render space: Y = -sim y), placed round the middle
 {
   const c = map.centre * TILE, looks: [number, number, boolean][] = [[0x5fb8c8, 0x2a4a8a, false], [0xd08a5a, 0x7a3e3a, false], [0x9a86e0, 0x4a3c86, true], [0x7ac8a0, 0x2c5a6a, false]];
-  R.planets = [0.4, 1.9, 3.3, 4.7].map((ang, i) => ({
-    x: c + Math.cos(ang) * 2600, y: -c + Math.sin(ang) * 2600, z: -2200 - i * 300, r: 520 + (i % 2) * 260,
-    a: looks[i][0], b: looks[i][1], ring: looks[i][2], seed: i * 1.7,
-  }));
+  const ring = openWorld ? [2600, 6200] : [2600];
+  R.planets = ring.flatMap((rad, k) => [0.4, 1.9, 3.3, 4.7].map((ang, i) => ({
+    x: c + Math.cos(ang + k * 0.8) * rad, y: -c + Math.sin(ang + k * 0.8) * rad, z: -2200 - ((i + k) % 4) * 300, r: 520 + ((i + k) % 2) * 300,
+    a: looks[(i + k) % 4][0], b: looks[(i + k) % 4][1], ring: looks[(i + k) % 4][2], seed: i * 1.7 + k,
+  })));
+  // nebula regions: coloured haze over that part of the zone
+  const NEB = [0x8a5cff, 0xff7a3c, 0x3cc8c0, 0x5a8a4a, 0x8ab8ff, 0xff6aa8];
+  R.nebulae = map.regions.filter(g => g.kind === 'nebula').map((g, i) => ({ x: g.x * TILE, y: -g.y * TILE, r: g.r * TILE, c: NEB[i % NEB.length] }));
 }
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -130,7 +140,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
   const tz = SHIP_Z + cam.lift;
   // keep the chase camera out of the walls: walk back from the target, stop short of a wall
   const fx = Math.cos(cam.pitch) * Math.cos(cam.yaw), fy = Math.cos(cam.pitch) * Math.sin(cam.yaw), fz = -Math.sin(cam.pitch);
-  for (let s = 8; s < dist; s += 4) {
+  for (let s = 8; s < dist && cam.pitch < 0.5; s += 4) { // only the low chase view can end up in a rock
     const px = tx - fx * s, py = ty - fy * s, pz = tz - fz * s;
     if (pz > WALL_TOP + 4) break;
     if (tileAt(map, Math.floor(px / TILE), Math.floor(-py / TILE)) === WALL) { dist = Math.max(20, s - 6); break; }
@@ -245,7 +255,7 @@ function effects(): void {
 
 // ---- drawing a frame ----------------------------------------------------------------------------
 // a few rocks, all deep down at about the same depth: one slow layer, not many fast ones
-const rocks = Array.from({ length: 110 }, (_, i) => ({
+const rocks = Array.from({ length: openWorld ? 360 : 110 }, (_, i) => ({
   x: rnd() * world.size, y: -rnd() * world.size, z: -300 - rnd() * 60, m: `rock${i % 5}`,
   yaw: rnd() * 6.28, spin: (rnd() - 0.5) * 0.12, tilt: rnd() * 6.28,
 }));
@@ -382,13 +392,14 @@ function aimGuide(me: Ship): void {
 // ---- HUD (drawn into the same pixel buffer) ---------------------------------------------------------
 const C_TEXT = abgr(0xd2e2f2), C_DIM = abgr(0x7f9fcc), C_BLUE = abgr(0x62c6ff), C_ORANGE = abgr(0xffc47a), C_SAFE = abgr(0x6dffb4);
 let radarImg: Uint32Array | null = null;
-const RADAR = 64, RSTEP = 3; // radar: 64 px square, one px per three tiles
+const RADAR = 64, RSTEP = 4; // radar: 64 px square, one px per four tiles
 function hud(fps: number): void {
   const out = R.hud, me = world.ships[ME];
   drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 4, C_BLUE);
   drawText(out, W, H, `M SOUND ${sfx.muted ? 'OFF' : 'ON'}  H HUD  L STACKS`, 4, 12, C_DIM);
-  drawText(out, W, H, 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
-  if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 28, C_DIM);
+  drawText(out, W, H, openWorld ? 'HOLD TAB FOR THE MAP' : 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
+  if (openWorld) drawText(out, W, H, `IN ${hereName}`, 4, 28, abgr(hereColour));
+  if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 36, C_DIM);
   // radar
   if (!radarImg) {
     const n = Math.ceil(map.n / RSTEP);
@@ -413,6 +424,80 @@ function hud(fps: number): void {
   for (const p of world.salvage) dot(p.x, p.y, abgr(0xc690ff));
   for (const sh of world.ships) if (sh.alive) dot(sh.x, sh.y, sh.id === ME ? C_SAFE : C_ORANGE);
   ui.draw(out);
+  if (openWorld && down.has('Tab')) worldMap(out, me);
+}
+
+// ---- the open world: where you are, and the map --------------------------------------------------
+const KIND_LABEL: Record<Region['kind'], string> = { hub: 'SAFE HUB', field: 'ASTEROID FIELD', derelict: 'DERELICT STATION', nebula: 'NEBULA', belt: 'THE RIM: NO WAY THROUGH' };
+const KIND_COLOUR: Record<Region['kind'], number> = { hub: 0x6dffb4, field: 0xd2d6e0, derelict: 0x8fb8ff, nebula: 0xc9a0ff, belt: 0xa0a4b0 };
+/** The region at a point (sim px): the rim first, then a field, derelict or the hub, then a nebula. */
+function regionAt(px: number, py: number): Region | null {
+  const tx = px / TILE, ty = py / TILE, e = Math.min(tx, ty, map.n - tx, map.n - ty);
+  let best: Region | null = null;
+  for (const g of map.regions) {
+    if (g.kind === 'belt') { if (e < g.r) return g; continue; }
+    if (Math.hypot(tx - g.x, ty - g.y) < g.r && (!best || (best.kind === 'nebula' && g.kind !== 'nebula'))) best = g;
+  }
+  return best;
+}
+let hereName = 'DEEP SPACE', hereColour = 0x7f9fcc, hereClock = 0;
+function trackRegion(dt: number): void {
+  if ((hereClock -= dt) > 0 || !openWorld) return;
+  hereClock = 0.3;
+  const me = world.ships[ME];
+  if (!me.alive) return;
+  const g = regionAt(me.x, me.y), name = g ? g.name : 'DEEP SPACE';
+  if (name !== hereName) ui.announce(name, g ? KIND_LABEL[g.kind] : 'OPEN SPACE', g ? KIND_COLOUR[g.kind] : 0x7f9fcc);
+  hereName = name; hereColour = g ? KIND_COLOUR[g.kind] : 0x7f9fcc;
+}
+
+const MS = 230; // the world map's size in HUD pixels
+let mapImg: Uint32Array | null = null;
+function worldMap(out: Uint32Array, me: Ship): void {
+  const n = map.n, k = n / MS, nebs = map.regions.filter(q => q.kind === 'nebula');
+  if (!mapImg) {
+    mapImg = new Uint32Array(MS * MS);
+    for (let y = 0; y < MS; y++) for (let x = 0; x < MS; x++) {
+      let wall = 0, safe = 0;
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+        const t = tileAt(map, Math.floor((x + i / 4) * k), Math.floor((y + j / 4) * k));
+        if (t === WALL) wall++; else if (t === SAFE) safe++;
+      }
+      const rimDist = Math.min(x, y, MS - 1 - x, MS - 1 - y) * k;
+      let c = safe ? 0x0c5a3c : wall > 8 ? (rimDist < 14 ? 0x1c2030 : 0x4a5068) : wall > 2 ? 0x2a2e40 : 0x070910;
+      nebs.forEach((g, i) => {
+        const d = Math.hypot(x * k - g.x, y * k - g.y) / g.r;
+        if (d < 1) c = mix(c, R.nebulae[i]?.c ?? 0x8a5cff, (1 - d) * 0.35);
+      });
+      mapImg[y * MS + x] = abgr(c);
+    }
+  }
+  const ox = (W - MS) >> 1, oy = ((H - MS) >> 1) + 6;
+  for (let i = 0; i < W * H; i++) out[i] = 0xd0000000 | (out[i] && (out[i] >>> 24) === 255 ? 0x100804 : 0x100804); // dim everything under the map
+  for (let y = -12; y < MS + 3; y++) for (let x = -3; x < MS + 3; x++) out[(oy + y) * W + ox + x] = abgr(0x0a1020);
+  for (let y = 0; y < MS; y++) out.set(mapImg.subarray(y * MS, y * MS + MS), (oy + y) * W + ox);
+  drawText(out, W, H, 'ZONE MAP', ox, oy - 9, C_TEXT);
+  const placed: number[][] = []; // labels nudged down until they don't overlap
+  for (const g of map.regions) {
+    if (g.kind === 'belt') continue;
+    const name = g.name, w = name.length * 4 - 1;
+    const x = Math.max(ox, Math.min(ox + MS - w - 1, ox + Math.round(g.x / k - w / 2)));
+    let y = oy + Math.round(g.y / k - 2);
+    for (let tries = 0; tries < 6 && placed.some(([a, b, c2]) => x < a + c2 + 3 && a < x + w + 3 && Math.abs(b - y) < 7); tries++) y += 7;
+    placed.push([x, y, w]);
+    drawText(out, W, H, name, x, y, abgr(KIND_COLOUR[g.kind]));
+  }
+  const dot = (wx: number, wy: number, c: number, s = 1) => {
+    const x = ox + Math.floor(wx / TILE / k), y = oy + Math.floor(wy / TILE / k);
+    for (let j = 0; j < s; j++) for (let i = 0; i < s; i++) out[(y + j) * W + x + i] = c;
+  };
+  for (const p of world.salvage) dot(p.x, p.y, abgr(0xc690ff));
+  for (const sh of world.ships) if (sh.alive && sh.id !== ME) dot(sh.x, sh.y, C_ORANGE, 2);
+  if (me.alive && Math.floor(performance.now() / 250) % 2 === 0) dot(me.x - TILE * k, me.y - TILE * k, abgr(0x6dffb4), 3);
+}
+function mix(a: number, b: number, t: number): number {
+  const ch = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
 
 /** The slice viewer: your hull's stack laid out slice by slice, and drawn the classic way. */
@@ -492,6 +577,7 @@ function frame(now: number): void {
   if (ui.hitStop > 0) ui.hitStop -= dt; // the kill's freeze-frame: the zone holds its breath
   else if (!ui.tips) acc += dt; // the zone waits while the tips card is up
   ui.update(dt);
+  trackRegion(dt);
   const input = readInput();
   while (acc >= STEP) {
     snapshot();
@@ -521,13 +607,14 @@ function render(dt: number): void {
   run(n: number, every = 1) {
     for (let i = 0; i < n; i++) {
       simStep(world, new Map([[ME, readInput()]]), tune, STEP); effects(); world.events.length = 0; simTime += STEP;
-      ui.update(STEP); ui.hitStop = 0;
+      ui.update(STEP); ui.hitStop = 0; trackRegion(STEP);
       if ((i + 1) % every === 0 || i === n - 1) render(STEP * every);
     }
   },
   stats: fightStats,
   locked() { return ui.lockId; },
   showTips(on: boolean) { ui.tips = on; },
+  regions: map.regions,
   aim() { return ui.aimPts; },
   hold(code: string, on: boolean) { if (on) down.add(code); else down.delete(code); },
   set(o: Partial<typeof opt>) { Object.assign(opt, o); },

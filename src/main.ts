@@ -94,7 +94,7 @@ function reset(): void {
   newView();
 }
 const me = (): Ship => world.ships[ME];
-const map = () => zoneMap(world.mapSeed, world.tiles);
+const map = () => zoneMap(world.mapSeed, world.tiles, world.mapStyle);
 /** The live ship with the biggest bounty (at least four times the starting bounty), or -1. */
 function mostWanted(): number {
   let best = -1, top = tune.bounty_start * 4 - 1;

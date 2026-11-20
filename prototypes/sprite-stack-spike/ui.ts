@@ -56,6 +56,9 @@ export class Ui {
   hitStop = 0;
   /** The controls and tips card (first launch, or T). The game waits while it is up. */
   tips = false;
+  private place: { name: string; kind: string; c: number; t: number } | null = null;
+  /** A region's name across the screen as you enter it. */
+  announce(name: string, kind: string, c: number): void { this.place = { name, kind, c, t: 0 }; }
   /** The enemy a shot fired now would meet (from the aim line), or -1: it gets brackets. */
   lockId = -1;
   /** The aim line's points in sim px (x, y pairs), from the nose outwards. */
@@ -213,6 +216,7 @@ export class Ui {
     else if ((this.chipHold -= dt) <= 0) this.chipE = Math.max(me.energy, this.chipE - maxEnergy(me, this.d.tune) * 0.9 * dt);
     this.edge.t += dt;
     if (this.banner && (this.banner.t += dt) > this.banner.max) this.banner = null;
+    if (this.place && (this.place.t += dt) > 3.2) this.place = null;
     if (this.toast && (this.toast.t += dt) > this.toast.max) this.toast = null;
     for (const f of this.feed) f.t += dt;
     this.feed = this.feed.filter(f => f.t < 6);
@@ -244,6 +248,11 @@ export class Ui {
     this.killFeed();
     this.bottom();
     this.bannerDraw();
+    if (this.place && !this.banner) {
+      const p = this.place, a = Math.round(255 * clamp01(Math.min(p.t / 0.35, (3.2 - p.t) / 0.7)));
+      this.textC(p.kind, this.W / 2, 44, DIM, 1, a);
+      this.textC(p.name, this.W / 2, 52, p.c, 2, a);
+    }
     if (this.tips) this.tipsCard();
     for (const c of this.coins) {
       for (let k = 1; k <= 2 && c.homing; k++) this.rect(c.x - 1, c.y + k * 2, 2, 2, col(GOLD, 120 / k));

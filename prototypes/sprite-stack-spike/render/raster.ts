@@ -15,7 +15,7 @@ import { fbmTexture, hash2 } from './noise';
 import { buildLut, PALETTE } from './palette';
 import type { Model } from './models';
 import {
-  BORDER, CHUNK, DECK, DECK_Z, DEEP, OPEN_E, OPEN_N, OPEN_S, OPEN_W, TOP, WALL_BOTTOM, WALL_TOP, type WallMesh,
+  BORDER, CHUNK, DECK, DECK_Z, DEEP, METAL, OPEN_E, OPEN_N, OPEN_S, OPEN_W, TOP, WALL_BOTTOM, WALL_TOP, type WallMesh,
 } from './walls';
 
 /** Flags per pixel. */
@@ -544,6 +544,15 @@ export class Renderer {
     const t = this.time, fogStart = this.camDist + 250, fogLen = 900;
     const nebZ = -2600, starLo = -6000, starHi = 6000; // far away, so they drift slowly
     const ditherAmp = opt.dither ? 10 : 0;
+    this.planetsVis = [];
+    for (const P of this.planets) {
+      const q = this.project(P.x, P.y, P.z);
+      if (!q) continue;
+      const sr = (P.r * 1.15 * f) / q[2] + 2;
+      if (q[0] + sr < 0 || q[0] - sr > W || q[1] + sr < 0 || q[1] - sr > H) continue;
+      this.planetsVis.push({ ...P, sx: q[0], sy: q[1], sr2: sr * sr });
+    }
+    const nebAct = this.nebulae.filter(nb => Math.hypot(nb.x - this.cx, nb.y - this.cy) < nb.r * 1.25 + this.far);
     for (let y = 0; y < H; y++) {
       const b = -(y + 0.5 - hh) / f;
       for (let x = 0; x < W; x++) {
@@ -552,6 +561,7 @@ export class Renderer {
         const z = depth[i];
         let r: number, g: number, bl: number;
         if (z === Infinity) {
+          this.pxX = x + 0.5; this.pxY = y + 0.5;
           this.background(dx, dy, dz, t, starLo, starHi, nebZ, f); r = this.bgR; g = this.bgG; bl = this.bgB;
         } else {
           const fl = flags[i];
@@ -559,7 +569,7 @@ export class Renderer {
           const wx = this.cx + dx * z, wy = this.cy + dy * z, wz = this.cz + dz * z;
           let emit = (fl & F_EMIT) !== 0;
           if (fl & F_WALL) { const s = this.wallTop(wx, wy, wz, wallInfo, mapN); c = s & 0xffffff; emit = s > 0xffffff; }
-          else if (fl & F_SIDE) { const s = this.wallSide(wx, wy, wz, (fl >> 5) & 7); c = s & 0xffffff; emit = s > 0xffffff; }
+          else if (fl & F_SIDE) { const s = this.wallSide(wx, wy, wz, (fl >> 5) & 7, wallInfo, mapN); c = s & 0xffffff; emit = s > 0xffffff; }
           else if (fl & F_DECK) { const s = this.deck(wx, wy); c = s & 0xffffff; emit = s > 0xffffff; }
           r = (c >> 16) & 255; g = (c >> 8) & 255; bl = c & 255;
           if (!emit) {
@@ -602,6 +612,20 @@ export class Renderer {
             }
           }
         }
+        // nebula regions: a soft coloured haze over that part of the zone, thickest in its middle
+        if (nebAct.length && dz < -1e-4) {
+          const tq = Math.min(z, (0 - this.cz) / dz);
+          if (tq > 0) {
+            const px = this.cx + dx * tq, py = this.cy + dy * tq;
+            for (const nb of nebAct) {
+              const d = Math.hypot(px - nb.x, py - nb.y) / nb.r;
+              if (d >= 1.25) continue;
+              const fall = d < 0.6 ? 1 : 1 - (d - 0.6) / 0.65, den = sampleSmooth(this.cloud, 256, px * 0.0005, py * 0.0005);
+              const k = fall * fall * (0.35 + den * 0.65) * 0.42;
+              r += ((nb.c >> 16) & 255) * k; g += ((nb.c >> 8) & 255) * k; bl += (nb.c & 255) * k;
+            }
+          }
+        }
         if (opt.palette) {
           const dd = ditherAmp ? BAYER[(y & 3) * 4 + (x & 3)] * ditherAmp : 0;
           const R = clamp255(r + dd), G = clamp255(g + dd), B = clamp255(bl + dd);
@@ -617,11 +641,17 @@ export class Renderer {
   /** Stars on two far planes (below and above, so every view has them) and the nebula floor. */
   private bgR = 0; private bgG = 0; private bgB = 0;
   /** Far planets: real spheres a long way below the zone, so they drift slowly and look right from any view. */
+  nebulae: { x: number; y: number; r: number; c: number }[] = [];
   planets: { x: number; y: number; z: number; r: number; a: number; b: number; ring: boolean; seed: number }[] = [];
+  /** This frame's planets that reach the screen, with their screen circle (for a quick reject per pixel). */
+  private planetsVis: (Renderer['planets'][number] & { sx: number; sy: number; sr2: number })[] = [];
+  private pxX = 0; private pxY = 0;
   private background(dx: number, dy: number, dz: number, _t: number, lo: number, hi: number, nebZ: number, f: number): void {
     let r = 4, g = 6, b = 14;
     const d2 = dx * dx + dy * dy + dz * dz;
-    for (const P of this.planets) {
+    for (const P of this.planetsVis) {
+      const ex = this.pxX - P.sx, ey = this.pxY - P.sy;
+      if (ex * ex + ey * ey > P.sr2) continue; // not near this planet on screen
       const ox = this.cx - P.x, oy = this.cy - P.y, oz = this.cz - P.z;
       const bq = ox * dx + oy * dy + oz * dz;
       if (bq > 0) continue; // behind the camera
@@ -687,6 +717,13 @@ export class Renderer {
     const sx = wx, sy = -wy, tx = Math.floor(sx / 16), ty = Math.floor(sy / 16);
     if (tx < 0 || ty < 0 || tx >= n || ty >= n) return 0x3b4152;
     const e = info[ty * n + tx], lx = sx - tx * 16, ly = sy - ty * 16, v = hash2(tx, ty, 5);
+    if (e & METAL) { // a derelict's steel deck plates
+      if ((e & OPEN_N && ly < 2) || (e & OPEN_W && lx < 2)) return 0xa6c0e0;
+      if ((e & OPEN_S && ly > 14) || (e & OPEN_E && lx > 14)) return 0x17203c;
+      if ((tx % 2 === 0 && lx < 1) || (ty % 2 === 0 && ly < 1)) return 0x17203c;
+      if (v > 0.8 && lx >= 7 && lx < 9 && ly >= 7 && ly < 9) return 0x1000000 | 0xffb050; // a working light
+      return v > 0.7 ? 0x2c3e6c : 0x2a3b68;
+    }
     if (v > 0.965 && lx >= 6 && lx < 10 && ly >= 6 && ly < 9) return 0x1000000 | (v > 0.985 ? 0xb488ff : 0x5fd0ff); // a crystal
     if ((e & OPEN_N && ly < 1.5) || (e & OPEN_W && lx < 1.5)) return 0x7c8496;
     if ((e & OPEN_S && ly > 14.5) || (e & OPEN_E && lx > 14.5)) return 0x22252f;
@@ -696,8 +733,19 @@ export class Renderer {
     return shade(base, lift);
   }
   /** Rock faces: soft strata that wander a little, darker towards the underside. */
-  private wallSide(wx: number, wy: number, wz: number, kind: number): number {
+  private wallSide(wx: number, wy: number, wz: number, kind: number, info: Uint8Array, n: number): number {
     const along = kind === 1 || kind === 2 ? wx : wy;
+    let metal = false;
+    for (const [ox, oy] of [[0.5, 0.5], [-0.5, -0.5]]) {
+      const tx = Math.floor((wx + ox) / 16), ty = Math.floor((-wy + oy) / 16);
+      if (tx >= 0 && ty >= 0 && tx < n && ty < n && info[ty * n + tx] & METAL) metal = true;
+    }
+    if (metal) {
+      const panel = Math.floor(along / 32), lp = along - panel * 32;
+      if (wz > 12 && wz < 14.5) return panel & 1 ? 0x1000000 | 0x1d6eb0 : 0x10162a;
+      if (lp < 1.2) return 0x0a0d1a;
+      return wz > 0 ? 0x2a3b68 : 0x1f2c52;
+    }
     const cell = Math.floor(along / 12), wob = (hash2(cell, kind, 3) - 0.5) * 5;
     const band = Math.floor((wz + wob) / 6), h = hash2(cell >> 1, band, 4);
     if (h > 0.992 && wz > 0) return 0x1000000 | 0x3a9cc8; // a faint vein of crystal
