@@ -55,6 +55,23 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **The map feels like a box, not space; movement must be race-smooth (Oscar, 2026-11-20):**
+  render-only, so collision and the map's layout are unchanged.
+  - Walls are drawn as rocky floating islands instead of steel slabs (`render/walls.ts`): each
+    tile's height grows with its distance from open space (8 to 40 px), so walls become stepped
+    mounds. Stone tops in broad patches, wandering strata on the sides, rare glowing crystals.
+  - The two-tile map border is not drawn. The edge of the zone is a soft violet energy field
+    that brightens towards the boundary and fades with distance (`resolve`), so the zone opens
+    onto space instead of ending at a wall.
+  - Four far planets (real ray-traced spheres 2,200-3,100 px below the zone, with banded
+    colours and a lit atmosphere rim) drift slowly under the play area: depth without extra
+    parallax layers.
+  - Racing: the top and iso cameras look ahead along your velocity (up to 110 px, smoothed),
+    so you see more of where you are going at speed.
+  - Still to do: the layout itself is rectangles (rooms, blocks, baffles from
+    `src/game/map.ts`). Organic, sparser layouts mean changing the shared map generator, which
+    also drives bot navigation, so that is a separate decision.
+
 - **Ships should tilt when turning; how does health come back? (Oscar, 2026-11-20):** ships now
   bank up to about 45 degrees on a soft spring that follows how fast they are really turning
   (measured per game step, so it never jitters) and settle with a slight overshoot when the turn

@@ -49,6 +49,14 @@ const models = buildModels();
 
 const R = new Renderer(W, H);
 R.deckCentre = map.centre * TILE;
+// a few far planets, deep below the zone (render space: Y = -sim y), placed round the middle
+{
+  const c = map.centre * TILE, looks: [number, number, boolean][] = [[0x5fb8c8, 0x2a4a8a, false], [0xd08a5a, 0x7a3e3a, false], [0x9a86e0, 0x4a3c86, true], [0x7ac8a0, 0x2c5a6a, false]];
+  R.planets = [0.4, 1.9, 3.3, 4.7].map((ang, i) => ({
+    x: c + Math.cos(ang) * 2600, y: -c + Math.sin(ang) * 2600, z: -2200 - i * 300, r: 520 + (i % 2) * 260,
+    a: looks[i][0], b: looks[i][1], ring: looks[i][2], seed: i * 1.7,
+  }));
+}
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const sfx = new Sfx();
@@ -93,6 +101,8 @@ function camGoal(sh: Ship): Cam {
 }
 let cam: Cam | null = null;
 let camX = 0, camY = 0;
+// look-ahead for racing: the view drifts a little ahead of where you are flying, smoothly
+let aheadX = 0, aheadY = 0;
 const angTo = (a: number, b: number): number => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 
 function updateCamera(dt: number, sh: Ship): CameraState {
@@ -107,7 +117,15 @@ function updateCamera(dt: number, sh: Ship): CameraState {
   cam.lead += (goal.lead - cam.lead) * k;
   cam.lift += (goal.lift - cam.lift) * k;
   camX = sh.x; camY = -sh.y;
-  const tx = camX + Math.cos(cam.yaw) * cam.lead, ty = camY + Math.sin(cam.yaw) * cam.lead;
+  {
+    let gx = sh.vx * 0.28, gy = -sh.vy * 0.28;
+    const gl = Math.hypot(gx, gy); if (gl > 110) { gx *= 110 / gl; gy *= 110 / gl; }
+    if (!sh.alive) { gx = 0; gy = 0; }
+    const ka = 1 - Math.exp(-dt * 2.2);
+    aheadX += (gx - aheadX) * ka; aheadY += (gy - aheadY) * ka;
+  }
+  const wAhead = Math.max(0, Math.min(1, (cam.pitch - 0.34) / 0.32)); // top and iso only; chase leads on its own
+  const tx = camX + Math.cos(cam.yaw) * cam.lead + aheadX * wAhead, ty = camY + Math.sin(cam.yaw) * cam.lead + aheadY * wAhead;
   let dist = Math.exp(cam.logDist);
   const tz = SHIP_Z + cam.lift;
   // keep the chase camera out of the walls: walk back from the target, stop short of a wall

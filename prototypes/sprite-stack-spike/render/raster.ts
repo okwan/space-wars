@@ -15,7 +15,7 @@ import { fbmTexture, hash2 } from './noise';
 import { buildLut, PALETTE } from './palette';
 import type { Model } from './models';
 import {
-  CHUNK, DECK, DECK_Z, DEEP, OPEN_E, OPEN_N, OPEN_S, OPEN_W, SIDE_E, SIDE_N, SIDE_S, SIDE_W, TOP, WALL_BOTTOM, WALL_TOP, type WallMesh,
+  BORDER, CHUNK, DECK, DECK_Z, DEEP, OPEN_E, OPEN_N, OPEN_S, OPEN_W, TOP, WALL_BOTTOM, WALL_TOP, type WallMesh,
 } from './walls';
 
 /** Flags per pixel. */
@@ -558,7 +558,7 @@ export class Renderer {
           let c = albedo[i];
           const wx = this.cx + dx * z, wy = this.cy + dy * z, wz = this.cz + dz * z;
           let emit = (fl & F_EMIT) !== 0;
-          if (fl & F_WALL) c = this.wallTop(wx, wy, wallInfo, mapN);
+          if (fl & F_WALL) { const s = this.wallTop(wx, wy, wz, wallInfo, mapN); c = s & 0xffffff; emit = s > 0xffffff; }
           else if (fl & F_SIDE) { const s = this.wallSide(wx, wy, wz, (fl >> 5) & 7); c = s & 0xffffff; emit = s > 0xffffff; }
           else if (fl & F_DECK) { const s = this.deck(wx, wy); c = s & 0xffffff; emit = s > 0xffffff; }
           r = (c >> 16) & 255; g = (c >> 8) & 255; bl = c & 255;
@@ -585,6 +585,23 @@ export class Renderer {
             }
           }
         }
+        // the zone's edge: no wall, a soft violet energy field that brightens towards the boundary
+        if (dz < -1e-4) {
+          const te = (6 - this.cz) / dz;
+          if (te > 0 && te < z) {
+            const px = this.cx + dx * te, py = -(this.cy + dy * te), S = mapN * 16, B = BORDER * 16;
+            const e = Math.min(px, py, S - px, S - py) - B;
+            const near = Math.max(0, Math.min(1, 1 - (te - 500) / 900)); // fades out with distance: no line on the horizon
+            if (e < 240 && near > 0) {
+              const pix = te / f; // world px per screen pixel there
+              let k = e < 0 ? 0.2 : (1 - e / 240) * (1 - e / 240) * 0.22;
+              if (Math.abs(e) < pix * 1.2) k = 0.6; // the boundary line itself
+              else if (e < 0 && (Math.abs(px % 64) < pix || Math.abs(py % 64) < pix)) k += 0.1; // a faint field grid
+              k *= near;
+              r += (120 - r) * k; g += (96 - g) * k; bl += (255 - bl) * k;
+            }
+          }
+        }
         if (opt.palette) {
           const dd = ditherAmp ? BAYER[(y & 3) * 4 + (x & 3)] * ditherAmp : 0;
           const R = clamp255(r + dd), G = clamp255(g + dd), B = clamp255(bl + dd);
@@ -599,8 +616,36 @@ export class Renderer {
 
   /** Stars on two far planes (below and above, so every view has them) and the nebula floor. */
   private bgR = 0; private bgG = 0; private bgB = 0;
+  /** Far planets: real spheres a long way below the zone, so they drift slowly and look right from any view. */
+  planets: { x: number; y: number; z: number; r: number; a: number; b: number; ring: boolean; seed: number }[] = [];
   private background(dx: number, dy: number, dz: number, _t: number, lo: number, hi: number, nebZ: number, f: number): void {
     let r = 4, g = 6, b = 14;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    for (const P of this.planets) {
+      const ox = this.cx - P.x, oy = this.cy - P.y, oz = this.cz - P.z;
+      const bq = ox * dx + oy * dy + oz * dz;
+      if (bq > 0) continue; // behind the camera
+      const cq = ox * ox + oy * oy + oz * oz - P.r * P.r, disc = bq * bq - d2 * cq;
+      const perp = Math.sqrt(Math.max(0, cq + P.r * P.r - (bq * bq) / d2)); // closest distance of the ray to the centre
+      if (disc > 0) {
+        const t = (-bq - Math.sqrt(disc)) / d2;
+        const nx = (ox + dx * t) / P.r, ny = (oy + dy * t) / P.r, nz = (oz + dz * t) / P.r;
+        const lam = Math.max(0, -0.5 * nx + 0.45 * ny + 0.74 * nz) * 0.75 + 0.25 * (nz * 0.5 + 0.5); // wrapped: never a black disc
+        const band = Math.sin(ny * 7 + Math.sin(nx * 4 + P.seed) * 1.4 + P.seed) * 0.5 + 0.5;
+        const ca = P.a, cb = P.b, k = (0.1 + lam * 0.8) * 0.6;
+        r = (((ca >> 16) & 255) * band + ((cb >> 16) & 255) * (1 - band)) * k;
+        g = (((ca >> 8) & 255) * band + ((cb >> 8) & 255) * (1 - band)) * k;
+        b = ((ca & 255) * band + (cb & 255) * (1 - band)) * k;
+        const rim = Math.pow(1 - Math.abs(nx * dx + ny * dy + nz * dz) / Math.sqrt(d2), 3) * lam; // thin lit atmosphere
+        r += 60 * rim; g += 90 * rim; b += 130 * rim;
+        this.bgR = r; this.bgG = g; this.bgB = b;
+        return;
+      }
+      if (perp < P.r * 1.12) { // a soft halo of atmosphere around the edge
+        const k = 1 - (perp - P.r) / (P.r * 0.12);
+        r += 14 * k * k; g += 22 * k * k; b += 40 * k * k;
+      }
+    }
     // nebula floor far below, coloured by a second noise
     if (dz < -1e-4) {
       const tn = (nebZ - this.cz) / dz;
@@ -637,28 +682,29 @@ export class Renderer {
   }
 
   /** Wall tops: blue steel plates, a seam grid every two tiles, rivets, lit and shadowed rims. */
-  private wallTop(wx: number, wy: number, info: Uint8Array, n: number): number {
+  /** Rock tops: cool grey stone in broad patches, a lit rim where the ground steps down, rare glowing crystals. */
+  private wallTop(wx: number, wy: number, wz: number, info: Uint8Array, n: number): number {
     const sx = wx, sy = -wy, tx = Math.floor(sx / 16), ty = Math.floor(sy / 16);
-    if (tx < 0 || ty < 0 || tx >= n || ty >= n) return 0x2a3b68;
+    if (tx < 0 || ty < 0 || tx >= n || ty >= n) return 0x3b4152;
     const e = info[ty * n + tx], lx = sx - tx * 16, ly = sy - ty * 16, v = hash2(tx, ty, 5);
-    if ((e & OPEN_N && ly < 2) || (e & OPEN_W && lx < 2)) return 0xa6c0e0;
-    if ((e & OPEN_S && ly > 14) || (e & OPEN_E && lx > 14)) return 0x17203c;
-    if ((tx % 2 === 0 && lx < 1) || (ty % 2 === 0 && ly < 1)) return 0x17203c;
-    if (v > 0.8 && lx >= 7 && lx < 9 && ly >= 7 && ly < 9) return 0x7f9fcc;
-    if (e & DEEP) return 0x24345e;
-    return v > 0.7 ? 0x2c3e6c : 0x2a3b68;
+    if (v > 0.965 && lx >= 6 && lx < 10 && ly >= 6 && ly < 9) return 0x1000000 | (v > 0.985 ? 0xb488ff : 0x5fd0ff); // a crystal
+    if ((e & OPEN_N && ly < 1.5) || (e & OPEN_W && lx < 1.5)) return 0x7c8496;
+    if ((e & OPEN_S && ly > 14.5) || (e & OPEN_E && lx > 14.5)) return 0x22252f;
+    // broad patches (8 px), not per-pixel speckle: calm to look at
+    const p = hash2(Math.floor(sx / 8), Math.floor(sy / 8), 9), lift = 0.8 + Math.min(1, Math.max(0, (wz - 10) / 30)) * 0.35;
+    const base = e & DEEP ? 0x3f4456 : p < 0.33 ? 0x3a3f50 : p < 0.66 ? 0x424758 : 0x46454f;
+    return shade(base, lift);
+  }
+  /** Rock faces: soft strata that wander a little, darker towards the underside. */
+  private wallSide(wx: number, wy: number, wz: number, kind: number): number {
+    const along = kind === 1 || kind === 2 ? wx : wy;
+    const cell = Math.floor(along / 12), wob = (hash2(cell, kind, 3) - 0.5) * 5;
+    const band = Math.floor((wz + wob) / 6), h = hash2(cell >> 1, band, 4);
+    if (h > 0.992 && wz > 0) return 0x1000000 | 0x3a9cc8; // a faint vein of crystal
+    const base = band & 1 ? 0x33374a : h < 0.5 ? 0x2c3040 : 0x2f3242;
+    return shade(base, 0.55 + Math.min(1, Math.max(0, (wz + 40) / 80)) * 0.55);
   }
 
-  /** Wall faces: a bright trim under the rim, a light strip, then dark plates fading downwards. */
-  private wallSide(wx: number, wy: number, wz: number, kind: number): number {
-    const along = kind === SIDE_N || kind === SIDE_S ? wx : wy;
-    const panel = Math.floor(along / 32), lp = along - panel * 32;
-    if (wz > WALL_TOP - 3) return 0x5f7fb6;
-    if (wz > 12 && wz < 14.5) return panel & 1 ? 0x1000000 | 0x1d6eb0 : 0x10162a; // steady, not blinking
-    if (lp < 1.2) return 0x0a0d1a;
-    if (wz < -14) return 0x10162a;
-    return wz > 0 ? 0x2a3b68 : 0x1f2c52;
-  }
 
   /** The safe deck: dark green plates with a bright grid, and a slow pulse running outwards. */
   private deck(wx: number, wy: number): number {
@@ -681,6 +727,10 @@ export class Renderer {
 }
 
 function norm(x: number, y: number, z: number): [number, number, number] { const l = Math.hypot(x, y, z); return [x / l, y / l, z / l]; }
+/** A colour scaled by k (0..2), clamped. */
+function shade(c: number, k: number): number {
+  return (clamp255(((c >> 16) & 255) * k) << 16) | (clamp255(((c >> 8) & 255) * k) << 8) | clamp255((c & 255) * k);
+}
 const clamp255 = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 /** Nearest sample of a size x size tiling texture at (u, v) in texture repeats. */
 function sample(tex: Float32Array, size: number, u: number, v: number): number {
