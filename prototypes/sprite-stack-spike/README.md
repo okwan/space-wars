@@ -55,6 +55,25 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 
 ## Findings so far
 
+- **HUD is hard to read, abilities are just text, kills don't feel rewarding (Oscar, 2026-11-20):**
+  `ui.ts` draws a real HUD into the pixel layer.
+  - An energy bar (energy is both health and ammo here) shows the part you just lost in a
+    softer colour that drains away after a beat, and pulses red under 30%.
+  - Ability slots (guns, bomb, mine, afterburner) have pixel icons and key labels. A dark shutter
+    shows the cooldown, the slot greys out when you can't afford it or are in the safe zone, and
+    pips show the gun and bomb level and the mines left.
+  - Kills, score and bounty sit in badges at the top. Other ships show their name, bounty and an
+    energy bar. Hits show markers and damage numbers. There is a kill feed and a toast for
+    salvage.
+  - The kill moment: a 75 ms freeze, a small camera zoom and a quick shake (kept small for eye
+    strain), a gold shock ring and sparks, a "TARGET DOWN" banner with the bounty you won
+    (DOUBLE! / TRIPLE! for quick kills, STREAK n for a run), a gold edge glow, and coins that
+    burst from the wreck and pour into your score, each with a rising chime, over a fanfare.
+    Sounds are synthesized (`sfx.ts`, M mutes).
+  - The ability row and energy bar share one low row so the chase view keeps your ship visible.
+  - Lesson for production: the reward is a sequence (freeze, flash, words, coins counting up,
+    sound), not one effect, and every step is short.
+
 - **Movement not smooth, blurry while flying, dizzy parallax (Oscar, 2026-11-20):** the picture
   was drawn only on 60 Hz sim steps, so frames between steps repeated or skipped. It was also
   stretched to the window by a non-integer factor, which smeared the pixels unevenly as the

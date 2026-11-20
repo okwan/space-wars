@@ -61,23 +61,25 @@ const G: Record<string, string> = {
 };
 
 /** Width in pixels of a line of text. */
-export const textWidth = (s: string): number => s.length * 4 - 1;
+export const textWidth = (s: string, k = 1): number => (s.length * 4 - 1) * k;
 
 /**
  * Draws text into a 32-bit frame buffer (ABGR words) at (x, y), with a dark drop shadow so it
  * reads over anything.
  */
-export function drawText(buf: Uint32Array, W: number, H: number, s: string, x: number, y: number, abgr: number, shadow = 0xff0a0605): void {
+export function drawText(buf: Uint32Array, W: number, H: number, s: string, x: number, y: number, abgr: number, shadow = 0xff0a0605, k = 1): void {
   const up = s.toUpperCase();
-  for (let pass = 0; pass < 2; pass++) {
-    const col = pass === 0 ? shadow : abgr, ox = pass === 0 ? 1 : 0, oy = pass === 0 ? 1 : 0;
+  for (let pass = shadow ? 0 : 1; pass < 2; pass++) {
+    const col = pass === 0 ? shadow : abgr, ox = pass === 0 ? Math.max(1, k >> 1) : 0, oy = ox;
     for (let i = 0; i < up.length; i++) {
       const g = G[up[i]];
       if (!g) continue;
       for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) {
         if (g[r * 3 + c] !== '#') continue;
-        const px = x + i * 4 + c + ox, py = y + r + oy;
-        if (px >= 0 && py >= 0 && px < W && py < H) buf[py * W + px] = col;
+        for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) {
+          const px = x + (i * 4 + c) * k + dx + ox, py = y + r * k + dy + oy;
+          if (px >= 0 && py >= 0 && px < W && py < H) buf[py * W + px] = col;
+        }
       }
     }
   }

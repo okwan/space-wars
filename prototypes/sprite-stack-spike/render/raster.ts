@@ -476,7 +476,14 @@ export class Renderer {
     for (let ly = 0; ly < LH; ly++) for (let lx = 0; lx < LW; lx++) {
       const h = hud[ly * LW + lx];
       if (!h) continue;
-      for (let dy = 0; dy < F; dy++) hiOut.fill(h, (ly * F + dy) * W + lx * F, (ly * F + dy) * W + lx * F + F);
+      const a = h >>> 24;
+      if (a === 255) { for (let dy = 0; dy < F; dy++) hiOut.fill(h, (ly * F + dy) * W + lx * F, (ly * F + dy) * W + lx * F + F); continue; }
+      // a see-through HUD pixel (panels, edge glows): blend over the picture
+      const k = a / 255, r = (h & 255) * k, g = ((h >> 8) & 255) * k, b = ((h >> 16) & 255) * k, j = 1 - k;
+      for (let dy = 0; dy < F; dy++) for (let dx = 0, p = (ly * F + dy) * W + lx * F; dx < F; dx++, p++) {
+        const c = hiOut[p];
+        hiOut[p] = 0xff000000 | (((((c >> 16) & 255) * j + b) | 0) << 16) | (((((c >> 8) & 255) * j + g) | 0) << 8) | (((c & 255) * j + r) | 0);
+      }
     }
   }
 

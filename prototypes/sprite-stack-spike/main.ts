@@ -9,14 +9,15 @@
 import config from '../../data/config.json';
 import { SAFE, TILE, WALL, tileAt, zoneMap } from '../../src/game/map';
 import { STEP, step as simStep } from '../../src/game/sim';
-import { maxEnergy } from '../../src/game/salvage';
 import { tuningFrom } from '../../src/game/tuning';
 import { HULL_RADIUS, type Ship, type ShipInput } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
-import { abgr, drawText, textWidth } from './render/font';
+import { abgr, drawText } from './render/font';
 import { buildModels, ENGINES, type Model } from './render/models';
 import { Renderer, type CameraState, type Light } from './render/raster';
 import { buildWalls, WALL_TOP } from './render/walls';
+import { Sfx } from './sfx';
+import { Ui } from './ui';
 
 // ---- setup --------------------------------------------------------------------------------------
 const params = new URLSearchParams(location.search);
@@ -42,10 +43,12 @@ const R = new Renderer(W, H);
 R.deckCentre = map.centre * TILE;
 const canvas = document.getElementById('screen') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
+const sfx = new Sfx();
 
 /** Render space: X = sim x, Y = -sim y, z up. Ships hover at this height between the walls. */
 const SHIP_Z = 10;
 const VOX = 2; // world px per voxel
+const ui = new Ui({ W, H, R, world, tune, map, me: ME, shipZ: SHIP_Z, sfx });
 const BULLET = [0, 0x9fe4ff, 0xffe27a, 0xff86e0], BOMB = [0, 0xff8a3a, 0xff4fb0, 0xb07dff];
 
 /**
@@ -102,7 +105,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
     if (pz > WALL_TOP + 4) break;
     if (tileAt(map, Math.floor(px / TILE), Math.floor(-py / TILE)) === WALL) { dist = Math.max(20, s - 6); break; }
   }
-  const scale = Math.exp(cam.logScale) * Math.exp(cam.logDist) / dist; // same picture size when pulled in
+  const scale = Math.exp(cam.logScale) * Math.exp(cam.logDist) / dist * ui.zoomKick; // same picture size when pulled in
   // straight down and square to the map, move the camera in whole screen pixels: the walls and
   // stacks then step cleanly instead of their edges crawling between pixels as you fly
   let sx = tx, sy = ty;
@@ -112,6 +115,8 @@ function updateCamera(dt: number, sh: Ship): CameraState {
     // ...and slide the finished picture by the remainder, in the screen's own pixels
     R.shiftX = Math.round((tx - sx) * scale * R.F); R.shiftY = Math.round(-(ty - sy) * scale * R.F);
   }
+  const [qx, qy] = ui.shake; // the kill's little shake, in screen pixels
+  R.shiftX += Math.round(qx * R.F); R.shiftY += Math.round(qy * R.F);
   return { tx: sx, ty: sy, tz, yaw: cam.yaw, pitch: cam.pitch, dist, scale };
 }
 
@@ -119,8 +124,10 @@ function updateCamera(dt: number, sh: Ship): CameraState {
 const down = new Set<string>();
 addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'Tab') e.preventDefault();
+  sfx.start();
   if (e.repeat) return;
   down.add(e.code);
+  if (e.code === 'KeyM') sfx.toggle();
   if (e.code === 'Digit1') view = 'top';
   if (e.code === 'Digit2') view = 'iso';
   if (e.code === 'Digit3') view = 'chase';
@@ -137,7 +144,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => down.delete(e.code));
 addEventListener('blur', () => down.clear());
 let dragX: number | null = null;
-canvas.addEventListener('pointerdown', e => { dragX = e.clientX; });
+canvas.addEventListener('pointerdown', e => { dragX = e.clientX; sfx.start(); });
 addEventListener('pointerup', () => { dragX = null; });
 addEventListener('pointermove', e => { if (dragX !== null && view !== 'chase') { isoTurn -= (e.clientX - dragX) * 0.01; dragX = e.clientX; } });
 const held = (...c: string[]): boolean => c.some(k => down.has(k));
@@ -164,7 +171,13 @@ function burst(x: number, y: number, n: number, speed: number, cols: number[]): 
   }
 }
 function effects(): void {
+  ui.events(world.events);
   for (const ev of world.events) {
+    if (ev.type === 'kill' && ev.by === ME && ev.ship !== ME) { // your kill: a gold shock ring and sparks
+      const v = world.ships[ev.ship];
+      flashes.push({ x: v.x, y: -v.y, z: SHIP_Z + 8, r: 240, life: 0, max: 0.7, cr: 1.8, cg: 1.4, cb: 0.5, ring: 90 });
+      burst(v.x, -v.y, 34, 220, [0xffd060, 0xfff2b0, 0xffffff, 0xffa040]);
+    }
     if (ev.type === 'burst') {
       const big = ev.n > 10;
       burst(ev.x, -ev.y, ev.n * (big ? 2 : 1), ev.speed * (big ? 1 : 0.8), big ? [0xd8d8e0, 0xff9a3c, 0xffd060, 0xe06c22, 0x6a6a7a] : [0xffe27a, 0xffffff]);
@@ -284,29 +297,15 @@ function draw(time: number, dt: number): CameraState {
 }
 
 // ---- HUD (drawn into the same pixel buffer) ---------------------------------------------------------
-const C_TEXT = abgr(0xd2e2f2), C_DIM = abgr(0x7f9fcc), C_BLUE = abgr(0x62c6ff), C_ORANGE = abgr(0xffc47a), C_GOLD = abgr(0xffd060), C_SAFE = abgr(0x6dffb4);
+const C_TEXT = abgr(0xd2e2f2), C_DIM = abgr(0x7f9fcc), C_BLUE = abgr(0x62c6ff), C_ORANGE = abgr(0xffc47a), C_SAFE = abgr(0x6dffb4);
 let radarImg: Uint32Array | null = null;
 const RADAR = 64, RSTEP = 3; // radar: 64 px square, one px per three tiles
 function hud(fps: number): void {
   const out = R.hud, me = world.ships[ME];
-  // name tags over ships
-  for (const sh of world.ships) {
-    if (!sh.alive || sh.id === ME) continue;
-    const p = R.project(sh.x, -sh.y, SHIP_Z + 14);
-    if (!p || p[2] > R.camDist + 500) continue;
-    const name = sh.name.replace('BOT ', '');
-    drawText(out, W, H, name, Math.round(p[0] - textWidth(name) / 2), Math.round(p[1] - 10), C_ORANGE);
-  }
-  drawText(out, W, H, 'BEACON WARS  SPRITE-STACK PROTOTYPE', 4, 4, C_TEXT);
-  drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 12, C_BLUE);
-  if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 20, C_DIM);
-  const e = `${Math.max(0, Math.round(me.energy))}`;
-  drawText(out, W, H, 'ENERGY', W - 4 - textWidth('ENERGY'), 4, C_DIM);
-  drawText(out, W, H, e, W - 4 - textWidth(e), 11, me.energy < maxEnergy(me, tune) * 0.3 ? abgr(0xff6a5a) : C_TEXT);
-  const kb = `KILLS ${me.kills}  BOUNTY ${me.bounty}`;
-  drawText(out, W, H, kb, W - 4 - textWidth(kb), 19, C_GOLD);
-  if (!me.alive) { const s = `RELAUNCHING IN ${Math.ceil(me.respawn)}`; drawText(out, W, H, s, (W - textWidth(s)) >> 1, H / 2 - 20, C_TEXT); }
-  drawText(out, W, H, 'ARROWS FLY  SHIFT BURN  SPACE GUNS  F BOMB  E MINE  DRAG TURN VIEW  L STACKS  H HUD', 4, H - 8, C_DIM);
+  drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 4, C_BLUE);
+  drawText(out, W, H, `M SOUND ${sfx.muted ? 'OFF' : 'ON'}  H HUD  L STACKS`, 4, 12, C_DIM);
+  drawText(out, W, H, 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
+  if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 28, C_DIM);
   // radar
   if (!radarImg) {
     const n = Math.ceil(map.n / RSTEP);
@@ -330,6 +329,7 @@ function hud(fps: number): void {
   };
   for (const p of world.salvage) dot(p.x, p.y, abgr(0xc690ff));
   for (const sh of world.ships) if (sh.alive) dot(sh.x, sh.y, sh.id === ME ? C_SAFE : C_ORANGE);
+  ui.draw(out);
 }
 
 /** The slice viewer: your hull's stack laid out slice by slice, and drawn the classic way. */
@@ -406,7 +406,9 @@ function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   fps = fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
-  acc += dt;
+  if (ui.hitStop > 0) ui.hitStop -= dt; // the kill's freeze-frame: the zone holds its breath
+  else acc += dt;
+  ui.update(dt);
   const input = readInput();
   while (acc >= STEP) {
     snapshot();
@@ -436,6 +438,7 @@ function render(dt: number): void {
   run(n: number, every = 1) {
     for (let i = 0; i < n; i++) {
       simStep(world, new Map([[ME, readInput()]]), tune, STEP); effects(); world.events.length = 0; simTime += STEP;
+      ui.update(STEP); ui.hitStop = 0;
       if ((i + 1) % every === 0 || i === n - 1) render(STEP * every);
     }
   },
