@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import config from '../../data/config.json';
 import { clearLine, findPath, hitsWall, inSafe, NAV, SAFE, TILE, tileAt, WALL, zoneMap } from '../../src/game/map';
 import { maxEnergy, topSpeed } from '../../src/game/salvage';
-import { damage, exposed, step, STEP } from '../../src/game/sim';
+import { damage, exposed, step, STEP, sweptHit } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
 import { NO_INPUT, type Ship, type ShipInput, type Tuning, type World } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
@@ -101,6 +101,16 @@ describe('flight', () => {
 });
 
 describe('weapons', () => {
+  it('a fast shot that passes through a ship between two steps still hits it', () => {
+    const SIZE = 10000, R = 13;
+    // ship at (500, 500); the shot jumps from 30 px before it to 30 px past it in one step
+    expect(sweptHit(470, 503, 530, 503, 500, 500, R, SIZE)).toBe(true);
+    // the same jump, but passing 20 px to the side: a miss
+    expect(sweptHit(470, 520, 530, 520, 500, 500, R, SIZE)).toBe(false);
+    // a shot that stops short of the ship is a miss, and one across the map's wrap edge still counts
+    expect(sweptHit(400, 500, 470, 500, 500, 500, R, SIZE)).toBe(false);
+    expect(sweptHit(SIZE - 20, 5, 20, 5, 0, 0, R, SIZE)).toBe(true);
+  });
   it('bullets carry the ship\'s own velocity, and cost energy', () => {
     const w = zone(), me = w.ships[0], at = openSpot(w, 200);
     alone(w, me);

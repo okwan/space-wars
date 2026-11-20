@@ -27,7 +27,7 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
 ## What is in it
 
 - **The real game underneath.** `src/game` (the free-for-all zone from PR #1: map, bots, guns,
-  bombs, mines, salvage, bounty) runs unchanged. Only the picture is new, which is the point:
+  bombs, mines, salvage, bounty) runs unchanged, apart from one hit-test fix (see findings). Only the picture is new, which is the point:
   the rules stay pure and server-ready whatever the renderer is.
 - **Software renderer** (`render/raster.ts`), 480 x 270 scaled up with nearest neighbour.
   Deferred: a G-buffer (albedo, sun term, depth, flags, object id), then a lighting pass.
@@ -54,6 +54,24 @@ iso views, **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **
   instead of going through walls.
 
 ## Findings so far
+
+- **Hard to kill anyone, awkward to aim (Oscar, 2026-11-20):** measured first. Bullets flew at
+  470 px/s against ships doing up to 345, so they visibly drifted with your ship's speed and
+  arrived late. A kill took about 13 hits. The hit check also only looked at where a bullet
+  ended each step, so a fast bullet could skip through the edge of a ship. Changes:
+  - `src/game/sim.ts` now tests a bullet's whole path each step (`sweptHit`, unit-tested), and
+    the bullet hitbox margin is a config value (`gun_reach`, 2 as before). This is the one
+    change to the shared rules, and it is a fix for the main game too.
+  - Prototype-only tuning (`main.ts`; `?classic` restores the shared numbers): bullets at
+    780 px/s with a shorter life (the same range), `gun_reach` 6, gun damage 220 (+80 a level),
+    and about 28% faster turning.
+  - An aim line: faint dots from the nose showing where a bullet fired now would go (they carry
+    your ship's speed). It turns orange, and the target gets brackets, when that shot would meet
+    an enemy that keeps its course. A hint only: nothing steers your shots.
+  - Scripted, 9 minutes over 3 seeds, all bots: bullet hits per volley 46% -> 65%, kills per
+    minute 3.2 -> 6.9, about 9 hits per kill (bomb hits included). A bot in your seat went from
+    0 kills and 4 deaths to 3 kills and 1 death. A newcomer who just flies and shoots died 7
+    times instead of 5, because time to kill is shorter for everyone.
 
 - **HUD is hard to read, abilities are just text, kills don't feel rewarding (Oscar, 2026-11-20):**
   `ui.ts` draws a real HUD into the pixel layer.

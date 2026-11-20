@@ -158,6 +158,20 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
   if (c.mine) dropMine(w, m, sh, tune);
 }
 
+/**
+ * Did a shot moving from (ax, ay) to (bx, by) this step pass within r of (cx, cy)? Tests the
+ * whole path, not just where it ended, so a fast shot cannot skip through a ship between steps.
+ * Exposed for tests.
+ */
+export function sweptHit(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, r: number, size: number): boolean {
+  const ex = wd(cx, bx, size), ey = wd(cy, by, size); // ship -> shot end, wrapped
+  const dx = wd(bx, ax, size), dy = wd(by, ay, size); // shot end -> shot start
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, -(ex * dx + ey * dy) / len2)) : 0;
+  const qx = ex + dx * t, qy = ey + dy * t;
+  return qx * qx + qy * qy < r * r;
+}
+
 function updateShots(w: World, tune: Tuning, dt: number): void {
   const m = zoneMap(w.mapSeed, w.tiles), size = w.size;
   const done = (b: Shot) => {
@@ -168,16 +182,17 @@ function updateShots(w: World, tune: Tuning, dt: number): void {
   for (const b of w.shots) {
     b.life -= dt;
     if (b.life <= 0) { if (b.kind === 'bomb') done(b); continue; }
+    const px = b.x, py = b.y;
     moveBody(m, b, 0, dt, 1, () => {
       if (b.bounces > 0) { b.bounces--; return true; }
       done(b); return false;
     });
     if (b.life <= 0) continue;
     if (inSafe(m, b.x, b.y)) { b.life = 0; continue; } // the safe zone swallows fire
-    const reach = b.kind === 'bomb' ? 6 : 2;
+    const reach = b.kind === 'bomb' ? 6 : tune.gun_reach;
     for (const sh of w.ships) {
       if (sh.id === b.owner || !sh.alive || sh.shield > 0) continue;
-      if (Math.hypot(wd(b.x, sh.x, size), wd(b.y, sh.y, size)) < HULL_RADIUS[sh.hull] + reach) {
+      if (sweptHit(px, py, b.x, b.y, sh.x, sh.y, HULL_RADIUS[sh.hull] + reach, size)) {
         if (b.kind === 'bomb') { done(b); break; }
         b.life = 0;
         w.events.push({ type: 'burst', x: b.x, y: b.y, n: 4, speed: 110, owner: b.owner });

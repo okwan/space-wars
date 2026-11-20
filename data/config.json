@@ -44,6 +44,7 @@
   "gun_cost_level": { "value": 8, "min": 0, "max": 100, "step": 1 },
   "gun_damage": { "value": 130, "min": 10, "max": 800, "step": 5 },
   "gun_damage_level": { "value": 55, "min": 0, "max": 400, "step": 5 },
+  "gun_reach": { "value": 2, "min": 0, "max": 16, "step": 1 },
   "multi_angle": { "value": 0.13, "min": 0.02, "max": 0.6, "step": 0.01 },
   "multi_cost": { "value": 18, "min": 0, "max": 200, "step": 1 },
   "bomb_speed": { "value": 400, "min": 100, "max": 1500, "step": 10 },

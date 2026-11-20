@@ -54,6 +54,10 @@ export interface UiDeps { W: number; H: number; R: Renderer; world: World; tune:
 export class Ui {
   /** Seconds the game should freeze (the kill's hit-stop); the loop reads and spends this. */
   hitStop = 0;
+  /** The enemy a shot fired now would meet (from the aim line), or -1: it gets brackets. */
+  lockId = -1;
+  /** The aim line's points in sim px (x, y pairs), from the nose outwards. */
+  readonly aimPts: number[] = [];
   private buf!: Uint32Array;
   private readonly W: number; private readonly H: number;
   private t = 0;
@@ -231,6 +235,7 @@ export class Ui {
   draw(buf: Uint32Array): void {
     this.buf = buf;
     this.edgeGlow();
+    this.aimLine();
     this.tags();
     this.markers();
     this.badges();
@@ -257,6 +262,18 @@ export class Ui {
     }
   }
 
+  /** Where your bullets would fly: small dots from the nose, warm when they would hit someone. */
+  private aimLine(): void {
+    const n = this.aimPts.length / 2, locked = this.lockId >= 0;
+    for (let k = 0; k < n; k++) {
+      const p = this.screen(this.aimPts[2 * k], this.aimPts[2 * k + 1]);
+      if (!p) continue;
+      const a = Math.round(230 * (1 - (k / n) * 0.75)), c = col(locked ? 0xffb070 : 0x8fd0ff, a);
+      this.put(p[0], p[1], c);
+      if (locked) this.put(p[0] + 1, p[1], c);
+    }
+  }
+
   /** Names, bounty and an energy bar over every other ship. */
   private tags(): void {
     const { world, me, tune } = this.d;
@@ -273,6 +290,16 @@ export class Ui {
       const recent = this.t - (this.lastHit.get(sh.id) ?? -9) < 0.25;
       this.rect(bx - 1, by - 1, bw + 2, 4, col(0x05060c, 200));
       this.rect(bx, by, Math.max(1, Math.round(bw * f)), 2, col(recent ? WHITE : f > 0.6 ? 0x7dff9a : f > 0.3 ? GOLD : RED));
+      if (sh.id === this.lockId) { // on target: corner brackets around the ship
+        const q = this.d.R.project(sh.x, -sh.y, this.d.shipZ);
+        if (q) {
+          const R0 = 9 + Math.round(Math.sin(this.t * 10)), L = 4, c = col(0xffb070);
+          for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+            const cx = Math.round(q[0]) + sx * R0, cy = Math.round(q[1]) + sy * R0;
+            this.rect(sx < 0 ? cx : cx - L + 1, cy, L, 1, c); this.rect(cx, sy < 0 ? cy : cy - L + 1, 1, L, c);
+          }
+        }
+      }
       if (sh.shield > 0) this.text('SHIELD', Math.round(p[0] - textWidth('SHIELD') / 2), by + 4, GREEN, 1, 180);
     }
   }

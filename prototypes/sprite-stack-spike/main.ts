@@ -10,6 +10,7 @@ import config from '../../data/config.json';
 import { SAFE, TILE, WALL, tileAt, zoneMap } from '../../src/game/map';
 import { STEP, step as simStep } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
+import { inSafe } from '../../src/game/map';
 import { HULL_RADIUS, type Ship, type ShipInput } from '../../src/game/types';
 import { newWorld } from '../../src/game/world';
 import { abgr, drawText } from './render/font';
@@ -31,6 +32,13 @@ if (!params.has('hardbots')) Object.assign(tune, {
   bot_reaction: 0.55, bot_aim_error: 0.24, bot_fire_angle: 0.06, bot_engage_range: 420,
   bot_bomb_range: 260, bot_mine_chance: 0.015, bot_bounty_reach: 0.2,
   bot_rookie_fights: 20, bot_rookie_aim: 3.5,
+});
+// Snappier combat for this prototype (Oscar: "kinda hard to kill someone, hard to aim"): bullets
+// twice as fast as a ship so they fly nearly straight out of the nose, a slightly wider bullet
+// hitbox, quicker turning, and fewer hits to kill. ?classic restores the shared numbers.
+if (!params.has('classic')) Object.assign(tune, {
+  gun_speed: 780, gun_life: 1.05, gun_reach: 6, gun_damage: 220, gun_damage_level: 80,
+  dart_turn: 5.4, lancer_turn: 4.7, bulwark_turn: 4.0,
 });
 const seed = Number(params.get('seed') ?? config.seed);
 const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0] });
@@ -170,9 +178,14 @@ function burst(x: number, y: number, n: number, speed: number, cols: number[]): 
       life: 0, max: 0.5 + rnd() * 0.9, col: cols[i % cols.length], size: 1.6 + rnd() * 2.4 });
   }
 }
+/** Fight numbers for checks: volleys fired, bullet hits and kills, everyone counted. */
+const fightStats = { volleys: 0, hits: 0, kills: 0 };
 function effects(): void {
   ui.events(world.events);
   for (const ev of world.events) {
+    if (ev.type === 'shot' && ev.kind === 'bullet') fightStats.volleys++;
+    else if (ev.type === 'hit') fightStats.hits++;
+    else if (ev.type === 'kill' && ev.by >= 0) fightStats.kills++;
     if (ev.type === 'kill' && ev.by === ME && ev.ship !== ME) { // your kill: a gold shock ring and sparks
       const v = world.ships[ev.ship];
       flashes.push({ x: v.x, y: -v.y, z: SHIP_Z + 8, r: 240, life: 0, max: 0.7, cr: 1.8, cg: 1.4, cb: 0.5, ring: 90 });
@@ -258,6 +271,7 @@ function draw(time: number, dt: number): CameraState {
       for (let k = 0; k < 20; k++) { const a = (k / 20) * Math.PI * 2 + time; R.drawPoint(x + Math.cos(a) * 22, y + Math.sin(a) * 22, z, 0x6dffb4, 1.6); }
     }
   }
+  aimGuide(me);
   // fire
   for (const sh of world.shots) {
     const x = sh.x, y = -sh.y, vx = sh.vx, vy = -sh.vy, sp = Math.hypot(vx, vy) || 1;
@@ -294,6 +308,33 @@ function draw(time: number, dt: number): CameraState {
   R.resolve(lights, mesh.info, map.tiles, map.n, opt);
   lastLights = lights;
   return cs;
+}
+
+/**
+ * The aim line: where your bullets would go if you fired now (they carry your ship's speed), as
+ * a row of faint dots from the nose. It turns warm, and the target gets brackets, when a shot
+ * fired now would meet an enemy that keeps its course. A hint only: nothing steers your shots.
+ */
+function aimGuide(me: Ship): void {
+  ui.lockId = -1; ui.aimPts.length = 0;
+  if (!me.alive || inSafe(map, me.x, me.y)) return;
+  const c = Math.cos(me.a), s = Math.sin(me.a), r = HULL_RADIUS[me.hull];
+  const bvx = me.vx + c * tune.gun_speed, bvy = me.vy + s * tune.gun_speed;
+  const ox = me.x + c * r, oy = me.y + s * r;
+  let best = Infinity;
+  for (const e of world.ships) {
+    if (e.id === ME || !e.alive || e.shield > 0) continue;
+    const rx = e.x - ox, ry = e.y - oy, vx = e.vx - bvx, vy = e.vy - bvy, v2 = vx * vx + vy * vy;
+    const t = Math.max(0, Math.min(tune.gun_life, -(rx * vx + ry * vy) / (v2 || 1)));
+    const dx = rx + vx * t, dy = ry + vy * t, rr = HULL_RADIUS[e.hull] + tune.gun_reach;
+    if (dx * dx + dy * dy < rr * rr && t < best) { best = t; ui.lockId = e.id; }
+  }
+  const n = 22, span = Math.min(best, 0.4);
+  for (let k = 1; k <= n; k++) {
+    const t = (k / n) * span, x = ox + bvx * t, y = oy + bvy * t;
+    if (tileAt(map, Math.floor(x / TILE), Math.floor(y / TILE)) === WALL) break;
+    ui.aimPts.push(x, y);
+  }
 }
 
 // ---- HUD (drawn into the same pixel buffer) ---------------------------------------------------------
@@ -442,6 +483,9 @@ function render(dt: number): void {
       if ((i + 1) % every === 0 || i === n - 1) render(STEP * every);
     }
   },
+  stats: fightStats,
+  locked() { return ui.lockId; },
+  aim() { return ui.aimPts; },
   hold(code: string, on: boolean) { if (on) down.add(code); else down.delete(code); },
   set(o: Partial<typeof opt>) { Object.assign(opt, o); },
   toggleStack(on: boolean) { showStack = on; },
