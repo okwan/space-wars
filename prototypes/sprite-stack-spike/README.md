@@ -56,6 +56,27 @@ iso views, **mouse wheel** or **+ / -** zoom, **L** shows the slice viewer, **H*
 
 ## Findings so far
 
+- **Copy the reference's movement and physics (Oscar, 2026-11-21; he chose "same logic, our own
+  close numbers"):** zubspace's code is MIT (Peter Kieltyka and contributors); its ship settings
+  come from the original game and are not, so the logic is reimplemented and the numbers are ours,
+  each within about 3% of what its zone uses with every ship spawning fully upgraded.
+  - Logic (`src/game/sim.ts` `fly`, switches in `data/config.json`, all off for the main game):
+    thrust along the heading the step began with and then turn (`turn_after_thrust`), a hard
+    speed cap (no coasting above it), recharge that keeps running on the afterburner
+    (`burn_regen`), the dash as a timed rocket-style burn (`dash_time`, `dash_top`,
+    `dash_thrust`). Already the same before: no drag, X-then-Y wall bounce, bullets carrying the
+    ship's full velocity.
+  - Numbers (`main.ts`, the default; `?oldfeel` is the last round's tuning): measured in the
+    page, dart 330 px/s top, 1.75 s to reach it, 264 deg/s turn; lancer 380, 2.23 s, 209;
+    bulwark 330, 1.83 s, 209 (the reference: 325/1.81/207 standard, 325/1.71/261 agile,
+    375/2.21/207 long-legged). Bullets 205 px/s plus the ship's velocity for 5.5 s, bounce keeps
+    62%, 1720 energy, 116/s recharge, afterburner drain 121/s.
+  - As in the reference with a full loadout, the afterburner adds no speed or thrust.
+  - Slow bullets make kills rarer: 3 minutes of bots, hit rate 23% and 3 kills (old feel: 55%,
+    9 kills).
+  - Fixed on the way: with the soft speed cap, holding thrust above the cap kept adding speed
+    (regression test in `tests/unit/abilities.test.ts`).
+
 - **More fun: ship classes that feel different, long coasting (Oscar, 2026-11-21):** compared
   with zubspace's settings and movement code (feel only, nothing copied): it has no drag either,
   and its ships differ less in raw numbers than in their special moves. What read as "braking"

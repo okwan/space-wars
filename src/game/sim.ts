@@ -104,7 +104,8 @@ function useAbility(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
   sh.energy -= cost; sh.abilityCool = cool;
   w.events.push({ type: 'ability', ship: sh.id, kind });
   if (kind === 'dash') {
-    sh.vx += Math.cos(sh.a) * tune.dash_speed; sh.vy += Math.sin(sh.a) * tune.dash_speed;
+    if (tune.dash_time > 0) sh.boost = tune.dash_time; // a timed rocket burn (see fly)
+    else { sh.vx += Math.cos(sh.a) * tune.dash_speed; sh.vy += Math.sin(sh.a) * tune.dash_speed; }
     return;
   }
   if (kind === 'scatter') {
@@ -180,27 +181,38 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
     return;
   }
   const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle);
-  const turn = turnRate(sh, tune);
-  if (c.left) sh.a -= turn * dt;
-  if (c.right) sh.a += turn * dt;
-  const canBurn = c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
+  // turn_after_thrust: thrust along the heading the ship had at the start of the step, then turn
+  // (the order of the classic arena shooters; with the burn_regen and dash_time options this
+  // follows the movement step of zubspace, MIT, (c) Peter Kieltyka and zubspace contributors,
+  // reimplemented here, not copied); 0 turns first
+  const turn = turnRate(sh, tune), rotate = (): void => {
+    if (c.left) sh.a -= turn * dt;
+    if (c.right) sh.a += turn * dt;
+  };
+  if (!tune.turn_after_thrust) rotate();
+  const boosting = sh.boost > 0, sp0 = Math.hypot(sh.vx, sh.vy); // speed before this step's thrust
+  const canBurn = !boosting && c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
   sh.burning = canBurn;
-  const acc = thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
-  sh.thrusting = c.thrust || c.rev;
-  if (c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
+  const acc = boosting ? tune.dash_thrust : thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
+  sh.thrusting = boosting || c.thrust || c.rev;
+  if (boosting || c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
   else if (c.rev) { sh.vx -= Math.cos(sh.a) * acc * dt; sh.vy -= Math.sin(sh.a) * acc * dt; }
+  if (tune.turn_after_thrust) rotate();
+  sh.boost = Math.max(0, sh.boost - dt);
   // no friction at all: a ship keeps whatever it has, up to its top speed (higher on the burner)
   // over the cap (off the burner, after a dash, pushed): back to it at once, or, with
   // overspeed_decel, eased back so a fast run coasts on instead of stopping dead
-  const cap = topSpeed(sh, tune) * (canBurn ? tune.burn_speed : 1), sp = Math.hypot(sh.vx, sh.vy);
+  const cap = Math.max(topSpeed(sh, tune) * (canBurn ? tune.burn_speed : 1), boosting ? tune.dash_top : 0), sp = Math.hypot(sh.vx, sh.vy);
   if (sp > cap) {
-    const to = tune.overspeed_decel > 0 ? Math.max(cap, sp - tune.overspeed_decel * dt) : cap;
+    // thrust can steer the extra speed but never add to it
+    const to = tune.overspeed_decel > 0 ? Math.max(cap, Math.min(sp, sp0) - tune.overspeed_decel * dt) : cap;
     sh.vx *= to / sp; sh.vy *= to / sp;
   }
   const fast = sp > 90;
   if (moveBody(m, sh, HULL_RADIUS[sh.hull], dt, tune.bounce) && fast) w.events.push({ type: 'bounce', ship: sh.id });
+  // burn_regen: energy keeps recharging while the afterburner drains it (0: no recharge while burning)
   if (canBurn) sh.energy -= tune.burn_drain * dt;
-  else sh.energy = Math.min(maxEnergy(sh, tune), sh.energy + regen(sh, tune) * dt);
+  if (!canBurn || tune.burn_regen) sh.energy = Math.min(maxEnergy(sh, tune), sh.energy + regen(sh, tune) * dt);
   sh.cool -= dt; sh.bombCool -= dt; sh.mineCool -= dt; sh.abilityCool -= dt; sh.flash -= dt; sh.shield -= dt;
   if (sh.shield > 0 && (c.fire || c.bomb || c.mine || c.ability)) sh.shield = 0; // firing drops spawn protection
   if (c.fire) fireGuns(w, m, sh, tune);

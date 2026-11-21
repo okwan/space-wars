@@ -52,6 +52,8 @@ export interface Ship {
   energy: number; alive: boolean; respawn: number;
   /** Cooldowns: guns, bombs, mines, the hull's ability. Seconds. */
   cool: number; bombCool: number; mineCool: number; abilityCool: number;
+  /** Seconds of dash boost left (a rocket-style burn: forward thrust and a higher cap; see dash_time). */
+  boost: number;
   /** Seconds of spawn protection left (no damage taken, none dealt). */
   shield: number;
   thrusting: boolean; burning: boolean; flash: number;

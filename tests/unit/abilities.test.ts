@@ -70,4 +70,47 @@ describe('hull abilities', () => {
     expect(b.vx).toBeGreaterThan(0);
     expect(foe.vx).toBeGreaterThan(0); // the foe is pushed away too
   });
+
+  it('dash_time turns the dash into a timed burn: forward thrust and a higher cap, then the normal cap', () => {
+    const tune = { ...base, dash_time: 1, dash_top: 600, dash_thrust: 400 };
+    const { w, me } = setup('dart', tune); tunes.set(w, tune);
+    const cap = topSpeed(me, tune);
+    me.vx = cap; me.vy = 0; // already at top speed, flying along the heading
+    go(w, input({ ability: true }), 30); // half a second of boost, no thrust key held
+    expect(me.vx).toBeGreaterThan(cap + 150);
+    go(w, NO_INPUT, 45); // the boost runs out: back to the cap at once
+    expect(Math.hypot(me.vx, me.vy)).toBeCloseTo(cap, 3);
+  });
+});
+
+describe('movement order and burn options', () => {
+  it('turn_after_thrust thrusts along the heading the step started with', () => {
+    const tune = { ...base, turn_after_thrust: 1 };
+    const { w, me } = setup('lancer', tune); tunes.set(w, tune);
+    me.a = 0;
+    go(w, input({ thrust: true, right: true }));
+    expect(me.vy).toBeCloseTo(0, 6); // pushed straight along x, then turned
+    expect(me.a).toBeGreaterThan(0);
+  });
+
+  it('burn_regen keeps recharging while the afterburner drains', () => {
+    const on = { ...base, burn_regen: 1 }, off = { ...base, burn_regen: 0 };
+    const a = setup('lancer', on), b = setup('lancer', off);
+    tunes.set(a.w, on); tunes.set(b.w, off);
+    a.me.energy = 1000; b.me.energy = 1000;
+    go(a.w, input({ thrust: true, burn: true }), 60);
+    go(b.w, input({ thrust: true, burn: true }), 60);
+    expect(b.me.energy).toBeCloseTo(1000 - off.burn_drain, 0);
+    expect(a.me.energy).toBeCloseTo(1000 - on.burn_drain + on.lancer_regen, 0);
+  });
+
+  it('with soft overspeed, holding thrust over the cap never builds speed beyond where it was', () => {
+    const tune = { ...base, overspeed_decel: 45 };
+    const { w, me, at } = setup('dart', tune); tunes.set(w, tune);
+    const cap = topSpeed(me, tune);
+    me.a = 0; me.vx = cap + 200; me.vy = 0;
+    for (let i = 0; i < 120; i++) { go(w, input({ thrust: true })); me.x = at.x; me.y = at.y; }
+    expect(me.vx).toBeLessThanOrEqual(cap + 200 - 2 * 45 + 1);
+    expect(me.vx).toBeGreaterThan(cap);
+  });
 });

@@ -17,7 +17,7 @@ export function randomHull(w: { seed: number }): Hull { return HULLS[Math.floor(
 function newShip(id: number, name: string): Ship {
   return {
     id, name, human: false, hull: 'lancer', nextHull: 'lancer',
-    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, bombCool: 0, mineCool: 0, abilityCool: 0, shield: 0,
+    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, bombCool: 0, mineCool: 0, abilityCool: 0, boost: 0, shield: 0,
     thrusting: false, burning: false, flash: 0, kills: 0, deaths: 0, lastHitBy: -1,
     up: UPGRADES.map(() => 0), bounty: 0, points: 0,
     brain: {
@@ -83,7 +83,7 @@ export function launch(w: World, sh: Ship, tune: Tuning, out = false): void {
   }
   sh.x = x; sh.y = y; sh.vx = 0; sh.vy = 0; sh.a = rand(w) * Math.PI * 2;
   sh.up = UPGRADES.map(() => 0); sh.bounty = tune.bounty_start; // a fresh ship: no salvage, base bounty
-  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.bombCool = 0.5; sh.mineCool = 0.5; sh.abilityCool = 1;
+  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.bombCool = 0.5; sh.mineCool = 0.5; sh.abilityCool = 1; sh.boost = 0;
   sh.flash = 0; sh.respawn = 0; sh.shield = out ? 0 : tune.spawn_shield;
   sh.brain.path = []; sh.brain.replan = 0;
 }

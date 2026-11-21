@@ -36,7 +36,8 @@ if (!params.has('hardbots')) Object.assign(tune, {
 // Snappier combat for this prototype (Oscar: "kinda hard to kill someone, hard to aim"): bullets
 // twice as fast as a ship so they fly nearly straight out of the nose, a slightly wider bullet
 // hitbox, quicker turning, and fewer hits to kill. ?classic restores the shared numbers.
-if (!params.has('classic')) Object.assign(tune, {
+const feel = params.has('classic') ? 'classic' : params.has('oldfeel') ? 'old' : 'ref';
+if (feel !== 'classic') Object.assign(tune, {
   gun_speed: 780, gun_life: 1.05, gun_reach: 6, gun_damage: 220, gun_damage_level: 80,
   dart_turn: 5.4, lancer_turn: 4.7, bulwark_turn: 4.0,
 });
@@ -51,7 +52,7 @@ if (openWorld) Object.assign(tune, {
 // speed cap when the afterburner let go. Now speed over the cap bleeds off slowly, so a burn or a
 // dash carries you a long way, and walls keep more of your speed. Each hull has one signature
 // move on Q (shared rules: dash, scatter, repulse). ?classic restores the shared numbers.
-if (!params.has('classic')) Object.assign(tune, {
+if (feel !== 'classic') Object.assign(tune, {
   overspeed_decel: 45, bounce: 0.75, burn_speed: 1.5, burn_thrust: 1.8,
   // Dart: an interceptor. Fastest, turns on a coin, rapid single gun, little armour. Q: dash.
   dart_energy: 1100, dart_regen: 150, dart_turn: 6.4, dart_thrust: 300, dart_speed: 430, dart_gun_interval: 0.11,
@@ -60,6 +61,24 @@ if (!params.has('classic')) Object.assign(tune, {
   // Bulwark: a heavy. Slow to turn and to get going, but huge energy and big bombs. Q: repulse.
   bulwark_energy: 2800, bulwark_regen: 100, bulwark_turn: 3.6, bulwark_thrust: 150, bulwark_speed: 310, bulwark_gun_interval: 0.3,
   dash_speed: 380, bot_ability_chance: 0.15,
+});
+// The reference feel (Oscar: "copy the exact logic of the movement and physics"; he chose "same
+// logic, our own close numbers"). The movement step follows zubspace's (MIT; see sim.ts fly):
+// no drag, thrust along the heading the step began with and then turn, a hard speed cap with
+// no coasting above it, recharge that keeps running on the afterburner, bounces that keep about
+// 62%, and bullets that carry the ship's full velocity. Every ship starts fully upgraded there,
+// so its afterburner adds no speed or thrust, only drain, and that is kept. The numbers are
+// ours, each within a few percent of what that zone uses; the hulls map to its agile ship (dart),
+// its long-legged one (lancer) and its standard one (bulwark). ?oldfeel brings back the last
+// round's tuning (fast bullets, soft cap, far-apart hulls); ?classic the shared numbers.
+if (feel === 'ref') Object.assign(tune, {
+  turn_after_thrust: 1, burn_regen: 1, overspeed_decel: 0, bounce: 0.62,
+  burn_speed: 1, burn_thrust: 1, burn_drain: 121,
+  dart_speed: 330, dart_thrust: 192, dart_turn: 4.6, dart_energy: 1720, dart_regen: 116, dart_gun_interval: 0.235,
+  lancer_speed: 380, lancer_thrust: 172, lancer_turn: 3.65, lancer_energy: 1720, lancer_regen: 116, lancer_gun_interval: 0.245,
+  bulwark_speed: 330, bulwark_thrust: 182, bulwark_turn: 3.65, bulwark_energy: 1720, bulwark_regen: 116, bulwark_gun_interval: 0.235,
+  gun_speed: 205, gun_life: 5.5, gun_reach: 2, bomb_speed: 205,
+  dash_time: 1.2, dash_top: 560, dash_thrust: 255,
 });
 const seed = Number(params.get('seed') ?? config.seed);
 const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0], mapStyle: openWorld ? 'open' : 'arena' });
@@ -684,6 +703,11 @@ const HULL_INFO: Record<Hull, { name: string; role: string; move: string; lines:
   lancer: { name: 'LANCER', role: 'FIGHTER', move: 'SCATTER: A RING OF SHRAPNEL', lines: ['BALANCED', 'TWIN GUNS', 'BOMBS BOUNCE ONCE'] },
   bulwark: { name: 'BULWARK', role: 'HEAVY', move: 'REPULSE: TURNS FIRE AWAY', lines: ['SLOW TO TURN AND START', 'HUGE ENERGY', 'BIG BOMBS'] },
 };
+if (feel === 'ref') { // the reference feel: close in speed, apart in handling and weapons
+  HULL_INFO.dart = { ...HULL_INFO.dart, role: 'DOGFIGHTER', move: 'DASH: A SHORT ROCKET BURN', lines: ['TURNS THE FASTEST', 'PUNCHY THRUST', 'SINGLE GUN'] };
+  HULL_INFO.lancer = { ...HULL_INFO.lancer, role: 'RUNNER', lines: ['HIGHEST TOP SPEED', 'SLOWER TO GET THERE', 'TWIN GUNS, BOUNCING BOMBS'] };
+  HULL_INFO.bulwark = { ...HULL_INFO.bulwark, role: 'BOMBER', lines: ['STEADY ALL-ROUNDER', 'BIGGEST BOMBS', 'SLOW SINGLE GUN'] };
+}
 let picking = !params.has('manual') && !params.has('bot') && !params.has('nopick');
 let pickIdx = HULLS.indexOf(world.ships[ME].nextHull);
 function pickKey(code: string): void {
@@ -746,10 +770,12 @@ function shipPicker(time: number): void {
     drawText(out, W, H, info.role, Math.round(x + cw / 2 - info.role.length * 2), y0 + 100, abgr(0xffc47a));
     let y = y0 + 112;
     const sp = tune[`${h}_speed`], tr = tune[`${h}_turn`], en = tune[`${h}_energy`], gr = tune[`${h}_barrels`] / tune[`${h}_gun_interval`];
-    stat(x + 8, y, 'SPEED', sp / 450, 0x62c6ff); y += 8;
-    stat(x + 8, y, 'TURN', tr / 6.6, 0x62c6ff); y += 8;
-    stat(x + 8, y, 'ENERGY', en / 2900, 0x6dffb4); y += 8;
-    stat(x + 8, y, 'GUNS', gr / 10, 0xffd060); y += 8;
+    const top = (k: 'speed' | 'turn' | 'energy') => Math.max(...HULLS.map(q => tune[`${q}_${k}`])) * 1.15;
+    const gtop = Math.max(...HULLS.map(q => tune[`${q}_barrels`] / tune[`${q}_gun_interval`])) * 1.15;
+    stat(x + 8, y, 'SPEED', sp / top('speed'), 0x62c6ff); y += 8;
+    stat(x + 8, y, 'TURN', tr / top('turn'), 0x62c6ff); y += 8;
+    stat(x + 8, y, 'ENERGY', en / top('energy'), 0x6dffb4); y += 8;
+    stat(x + 8, y, 'GUNS', gr / gtop, 0xffd060); y += 8;
     stat(x + 8, y, 'BOMBS', tune[`${h}_bomb_level`] / 2, 0xff7ac0); y += 11;
     for (const l of info.lines) { drawText(out, W, H, l, x + 8, y, C_TEXT); y += 8; }
     y += 3;
