@@ -18,7 +18,8 @@ npm run proto:stack          # dev server, open the printed URL
 npm run proto:stack:build    # one self-contained file: prototypes/sprite-stack-spike/dist/index.html
 ```
 
-Controls are the game's: arrows or WASD fly, Shift burns, Space guns, F bomb, E mine.
+Controls are the game's: arrows or WASD fly, Shift burns, Space guns, F bomb, E mine, **Q** the
+hull's move, **X** ship select, **R** race.
 **1 / 2 / 3** pick top-down / isometric / third-person (**C** cycles), drag to turn the top and
 iso views, **mouse wheel** or **+ / -** zoom, **L** shows the slice viewer, **H** hides the HUD, **O** outlines,
 **P** palette snapping, **G** dithering, **I** frame stats. URL flags: `?bot` (a bot flies your ship), `?view=iso`,
@@ -54,6 +55,28 @@ iso views, **mouse wheel** or **+ / -** zoom, **L** shows the slice viewer, **H*
   instead of going through walls.
 
 ## Findings so far
+
+- **More fun: ship classes that feel different, long coasting (Oscar, 2026-11-21):** compared
+  with zubspace's settings and movement code (feel only, nothing copied): it has no drag either,
+  and its ships differ less in raw numbers than in their special moves. What read as "braking"
+  here was the hard speed cap snapping you back the moment the afterburner let go.
+  - Shared rules (`src/game/sim.ts`, unit-tested in `tests/unit/abilities.test.ts`):
+    `overspeed_decel` lets speed above the cap bleed off slowly instead of being cut (0, the
+    default, keeps the main game as it was). Each hull gets a signature move on Q: **Dart:
+    dash** (a burst of speed past the cap), **Lancer: scatter** (a ring of bouncing shrapnel),
+    **Bulwark: repulse** (pushes nearby ships away and turns enemy fire round as its own).
+    Bots use them now and then.
+  - Prototype tuning (`?classic` restores the shared numbers): the hulls are pulled far apart
+    (Dart 430 px/s, turn 6.4, 1100 energy; Lancer 370, 5.0, 1700; Bulwark 310, 3.6, 2800),
+    overspeed bleeds at 45 px/s per second (a burn or a dash coasts on for several seconds),
+    and walls keep 75% of your speed.
+  - Ship select screen at launch and on X (turning sprite-stacked hulls, stat bars, the move);
+    switching while flying relaunches you at the hub. The Q slot shows the move and its cooldown.
+  - Most wanted: the top bounty (40+) wears a gold crown, gets a gold radar dot and an arrow at
+    the screen edge with the range; downing them reads "MOST WANTED DOWN". Streak callouts for
+    every pilot ("ASH IS ON A STREAK (3)", "... ENDED ...'S STREAK").
+  - Race mode (R): eight gates on a loop round the hub, a clock from the first gate, best time
+    kept per map seed in the browser. Racers are ghosts (no damage either way) until the race ends.
 
 - **Should feel more zoomed out (Oscar, 2026-11-20):** the top-down view now shows about 1.8 times
   as far in each direction (scale 0.5 -> 0.28 world px per screen px at 480 x 270; iso 0.56 -> 0.33),

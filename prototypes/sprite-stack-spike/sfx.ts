@@ -51,6 +51,20 @@ export class Sfx {
   /** One coin landing in the score: pitch climbs as the coins pour in. */
   coin(i: number): void { const f = 1500 * Math.pow(2, Math.min(i, 14) / 24); this.tone(f, 0.07, 'sine', 0.08); this.tone(f * 1.5, 0.05, 'sine', 0.03, 0, 0.02); }
   salvage(): void { this.tone(600, 0.2, 'triangle', 0.1, 2.2); this.tone(900, 0.2, 'sine', 0.06, 2, 0.08); }
+  /** Your hull's signature move. */
+  ability(kind: 'dash' | 'scatter' | 'repulse'): void {
+    if (kind === 'dash') { this.tone(300, 0.22, 'sawtooth', 0.06, 3.2); this.tone(900, 0.18, 'sine', 0.05, 2); }
+    else if (kind === 'scatter') { for (let i = 0; i < 4; i++) this.tone(1800 - i * 260, 0.06, 'square', 0.04, 0.6, i * 0.025); }
+    else { this.tone(110, 0.35, 'sine', 0.25, 2.4); this.tone(330, 0.3, 'triangle', 0.08, 2); }
+  }
+  /** A race gate passed: a bright ping, higher for each gate. */
+  gate(i: number): void { const f = 880 * Math.pow(2, Math.min(i, 12) / 12); this.tone(f, 0.12, 'sine', 0.1); this.tone(f * 1.5, 0.1, 'sine', 0.05, 0, 0.04); }
+  /** The race finished; a best time sounds brighter. */
+  finish(best: boolean): void {
+    [523.25, 659.25, 783.99, 1046.5, best ? 1318.5 : 1046.5].forEach((f, i) => this.tone(f, 0.22, 'square', 0.06, 0, i * 0.08));
+  }
+  /** Someone became the most wanted pilot. */
+  wanted(): void { this.tone(660, 0.14, 'triangle', 0.08); this.tone(990, 0.2, 'triangle', 0.07, 0, 0.12); }
   /** You were downed. */
   downed(): void { this.tone(440, 0.5, 'triangle', 0.12, 0.4); this.tone(110, 0.6, 'sine', 0.2, 0.5); }
 }

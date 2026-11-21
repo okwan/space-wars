@@ -7,12 +7,12 @@
 // mines and salvage) runs unchanged. Only the picture is new.
 
 import config from '../../data/config.json';
-import { SAFE, TILE, WALL, tileAt, zoneMap, type Region } from '../../src/game/map';
+import { SAFE, TILE, WALL, hitsWall, tileAt, zoneMap, type Region } from '../../src/game/map';
 import { STEP, step as simStep } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
 import { inSafe } from '../../src/game/map';
-import { HULL_RADIUS, type Ship, type ShipInput } from '../../src/game/types';
-import { newWorld } from '../../src/game/world';
+import { HULL_ABILITY, HULL_RADIUS, HULLS, type Hull, type Ship, type ShipInput } from '../../src/game/types';
+import { launch, newWorld } from '../../src/game/world';
 import { abgr, drawText } from './render/font';
 import { buildModels, ENGINES, type Model } from './render/models';
 import { Renderer, type CameraState, type Light } from './render/raster';
@@ -45,6 +45,21 @@ if (!params.has('classic')) Object.assign(tune, {
 const openWorld = !params.has('arena');
 if (openWorld) Object.assign(tune, {
   map_tiles: 1024, salvage_max: 220, salvage_rate: tune.salvage_rate * 2.5, bot_company_share: 0.3, pilots: 18,
+});
+// Ship classes that feel different, and long coasting (Oscar: "different classes feel different",
+// "you could be flying for a while"). There was never drag; what felt like braking was the hard
+// speed cap when the afterburner let go. Now speed over the cap bleeds off slowly, so a burn or a
+// dash carries you a long way, and walls keep more of your speed. Each hull has one signature
+// move on Q (shared rules: dash, scatter, repulse). ?classic restores the shared numbers.
+if (!params.has('classic')) Object.assign(tune, {
+  overspeed_decel: 45, bounce: 0.75, burn_speed: 1.5, burn_thrust: 1.8,
+  // Dart: an interceptor. Fastest, turns on a coin, rapid single gun, little armour. Q: dash.
+  dart_energy: 1100, dart_regen: 150, dart_turn: 6.4, dart_thrust: 300, dart_speed: 430, dart_gun_interval: 0.11,
+  // Lancer: the all-rounder. Twin guns, bouncing bombs. Q: scatter, a ring of shrapnel.
+  lancer_energy: 1700, lancer_regen: 115, lancer_turn: 5.0, lancer_thrust: 220, lancer_speed: 370, lancer_gun_interval: 0.2,
+  // Bulwark: a heavy. Slow to turn and to get going, but huge energy and big bombs. Q: repulse.
+  bulwark_energy: 2800, bulwark_regen: 100, bulwark_turn: 3.6, bulwark_thrust: 150, bulwark_speed: 310, bulwark_gun_interval: 0.3,
+  dash_speed: 380, bot_ability_chance: 0.15,
 });
 const seed = Number(params.get('seed') ?? config.seed);
 const world = newWorld(tune, { seed, humans: params.has('bot') ? [] : [0], mapStyle: openWorld ? 'open' : 'arena' });
@@ -182,7 +197,10 @@ addEventListener('keydown', e => {
     ui.tips = false; try { localStorage.setItem('bw-proto-tips', '1'); } catch { /* private mode */ }
     e.preventDefault(); return;
   }
+  if (picking) { pickKey(e.code); e.preventDefault(); return; }
   if (e.code === 'KeyT') { ui.tips = true; down.clear(); return; }
+  if (e.code === 'KeyX') { picking = true; pickIdx = HULLS.indexOf(world.ships[ME].nextHull); down.clear(); return; }
+  if (e.code === 'KeyR') toggleRace();
   down.add(e.code);
   if (e.code === 'KeyM') sfx.toggle();
   if (e.code === 'Digit1') view = 'top';
@@ -212,7 +230,7 @@ const held = (...c: string[]): boolean => c.some(k => down.has(k));
 function readInput(): ShipInput {
   return {
     left: held('ArrowLeft', 'KeyA'), right: held('ArrowRight', 'KeyD'), thrust: held('ArrowUp', 'KeyW'), rev: held('ArrowDown', 'KeyS'),
-    burn: held('ShiftLeft', 'ShiftRight'), fire: held('Space'), bomb: held('KeyF', 'KeyB'), mine: held('KeyE'),
+    burn: held('ShiftLeft', 'ShiftRight'), fire: held('Space'), bomb: held('KeyF', 'KeyB'), mine: held('KeyE'), ability: held('KeyQ'),
   };
 }
 const opt = { outline: true, palette: false, dither: false };
@@ -259,6 +277,18 @@ function effects(): void {
     } else if (ev.type === 'blast') {
       flashes.push({ x: ev.x, y: -ev.y, z: SHIP_Z + 4, r: ev.r * 2.2, life: 0, max: 0.45, cr: 1.4, cg: 0.7, cb: 1.2, ring: ev.r });
       burst(ev.x, -ev.y, 18, 160, [0xff5fb0, 0xffa8d8, 0xff8a3a]);
+    } else if (ev.type === 'ability') {
+      const s = world.ships[ev.ship], x = s.x, y = -s.y, mine = ev.ship === ME;
+      if (ev.kind === 'dash') { // a white-blue streak left behind
+        const c = Math.cos(s.a), sn = Math.sin(s.a);
+        for (let k = 0; k < 10; k++) burst(x - c * k * 7, y + sn * k * 7, 2, 40, [0xa8e6ff, 0xffffff]);
+        flashes.push({ x, y, z: SHIP_Z + 4, r: 90, life: 0, max: 0.25, cr: 0.6, cg: 1.0, cb: 1.6, ring: 0 });
+      } else if (ev.kind === 'scatter') {
+        flashes.push({ x, y, z: SHIP_Z + 4, r: 130, life: 0, max: 0.3, cr: 1.6, cg: 1.3, cb: 0.6, ring: 40 });
+      } else { // repulse: a wide pale wave
+        flashes.push({ x, y, z: SHIP_Z + 4, r: tune.repulse_radius * 1.6, life: 0, max: 0.4, cr: 0.7, cg: 1.4, cb: 1.6, ring: tune.repulse_radius });
+      }
+      if (mine) sfx.ability(ev.kind);
     } else if (ev.type === 'hit') {
       const s = world.ships[ev.ship];
       burst(s.x, -s.y, 5, 90, [0xffffff, 0x9fe4ff]);
@@ -338,6 +368,7 @@ function draw(time: number, dt: number): CameraState {
     }
   }
   aimGuide(me);
+  drawGates(time, lights);
   // fire
   for (const sh of world.shots) {
     const x = sh.x, y = -sh.y, vx = sh.vx, vy = -sh.vy, sp = Math.hypot(vx, vy) || 1;
@@ -436,7 +467,9 @@ function hud(fps: number): void {
     if (x >= 0 && y >= 0 && x < RADAR && y < RADAR) out[(oy + y) * W + ox + x] = c;
   };
   for (const p of world.salvage) dot(p.x, p.y, abgr(0xc690ff));
-  for (const sh of world.ships) if (sh.alive) dot(sh.x, sh.y, sh.id === ME ? C_SAFE : C_ORANGE);
+  for (const sh of world.ships) if (sh.alive) dot(sh.x, sh.y, sh.id === ME ? C_SAFE : sh.id === ui.wantedId ? abgr(0xffd060) : C_ORANGE);
+  if (race) { const g = race.gates[race.next]; dot(g.x, g.y, abgr(0x7ff8ff)); dot(g.x + 16, g.y, abgr(0x7ff8ff)); }
+  if (race) raceHud(out);
   ui.draw(out);
   if (openWorld && down.has('Tab')) worldMap(out, me);
 }
@@ -589,14 +622,14 @@ function frame(now: number): void {
   last = now;
   fps = fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
   if (ui.hitStop > 0) ui.hitStop -= dt; // the kill's freeze-frame: the zone holds its breath
-  else if (!ui.tips) acc += dt; // the zone waits while the tips card is up
+  else if (!ui.tips && !picking) acc += dt; // the zone waits while the tips card is up
   ui.update(dt);
   trackRegion(dt);
   const input = readInput();
   while (acc >= STEP) {
     snapshot();
     simStep(world, new Map([[ME, input]]), tune, STEP);
-    effects();
+    effects(); raceStep();
     world.events.length = 0;
     acc -= STEP; simTime += STEP;
   }
@@ -610,6 +643,7 @@ function render(dt: number): void {
   draw(simTime, dt);
   if (showHud) hud(fps);
   if (showStack) stackPanel(simTime);
+  if (picking && showHud && !ui.tips) shipPicker(simTime + performance.now() / 1000);
   R.composite(lastLights);
   ctx.putImageData(R.present(), 0, 0);
 }
@@ -620,7 +654,7 @@ function render(dt: number): void {
   /** Runs the zone n steps and draws one frame per `every` steps (camera glides at 60 fps). */
   run(n: number, every = 1) {
     for (let i = 0; i < n; i++) {
-      simStep(world, new Map([[ME, readInput()]]), tune, STEP); effects(); world.events.length = 0; simTime += STEP;
+      simStep(world, new Map([[ME, readInput()]]), tune, STEP); effects(); raceStep(); world.events.length = 0; simTime += STEP;
       ui.update(STEP); ui.hitStop = 0; trackRegion(STEP);
       if ((i + 1) % every === 0 || i === n - 1) render(STEP * every);
     }
@@ -630,6 +664,10 @@ function render(dt: number): void {
   showTips(on: boolean) { ui.tips = on; },
   regions: map.regions,
   get camScale() { return camScale; },
+  pick(on: boolean, hull?: Hull) { picking = on; if (hull) pickIdx = HULLS.indexOf(hull); },
+  choose(hull: Hull) { choose(hull); },
+  race() { toggleRace(); return race; },
+  get raceState() { return race; },
   aim() { return ui.aimPts; },
   hold(code: string, on: boolean) { if (on) down.add(code); else down.delete(code); },
   set(o: Partial<typeof opt>) { Object.assign(opt, o); },
@@ -638,3 +676,165 @@ function render(dt: number): void {
 };
 if (!params.has('manual')) requestAnimationFrame(frame); else render(1 / 60);
 void frames;
+
+// ---- ship select (X, and at launch) ----------------------------------------------------------------
+// Three hulls that fly differently (see the tuning at the top), each with its own move on Q.
+const HULL_INFO: Record<Hull, { name: string; role: string; move: string; lines: string[] }> = {
+  dart: { name: 'DART', role: 'INTERCEPTOR', move: 'DASH: A BURST OF SPEED', lines: ['FASTEST, TURNS ON A COIN', 'RAPID SINGLE GUN', 'LIGHT: FEW HITS TO DOWN'] },
+  lancer: { name: 'LANCER', role: 'FIGHTER', move: 'SCATTER: A RING OF SHRAPNEL', lines: ['BALANCED', 'TWIN GUNS', 'BOMBS BOUNCE ONCE'] },
+  bulwark: { name: 'BULWARK', role: 'HEAVY', move: 'REPULSE: TURNS FIRE AWAY', lines: ['SLOW TO TURN AND START', 'HUGE ENERGY', 'BIG BOMBS'] },
+};
+let picking = !params.has('manual') && !params.has('bot') && !params.has('nopick');
+let pickIdx = HULLS.indexOf(world.ships[ME].nextHull);
+function pickKey(code: string): void {
+  if (code === 'ArrowLeft' || code === 'KeyA') pickIdx = (pickIdx + 2) % 3;
+  else if (code === 'ArrowRight' || code === 'KeyD') pickIdx = (pickIdx + 1) % 3;
+  else if (code === 'Digit1' || code === 'Digit2' || code === 'Digit3') { pickIdx = Number(code.slice(5)) - 1; choose(HULLS[pickIdx]); }
+  else if (code === 'Enter' || code === 'Space' || code === 'KeyQ') choose(HULLS[pickIdx]);
+  else if (code === 'Escape' || code === 'KeyX') picking = false;
+  sfx.start();
+}
+/** Takes a hull: now if you are flying a different one (a fresh launch at the hub), else at the next launch. */
+function choose(h: Hull): void {
+  const me = world.ships[ME];
+  picking = false; down.clear();
+  me.nextHull = h;
+  if (me.alive && me.hull !== h) { launch(world, me, tune); prevShip.delete(ME); if (race) toggleRace(); }
+  ui.say(`${HULL_INFO[h].name} READY  -  Q: ${HULL_INFO[h].move.split(':')[0]}`, 0x7ff8ff);
+}
+function fill(out: Uint32Array, x: number, y: number, w: number, h: number, c: number): void {
+  for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy++) for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx++) out[yy * W + xx] = c;
+}
+/** The hull drawn as a classic sprite stack (slices one pixel apart), turning slowly, lit from above. */
+function stackSprite(out: Uint32Array, st: Model['stack'], cx: number, cy: number, a: number, K: number): void {
+  const ca = Math.cos(a), sa = Math.sin(a);
+  for (let z = 0; z < st.h; z++) {
+    const sl = st.slice(z), lit = 0.7 + 0.3 * (z / Math.max(1, st.h - 1));
+    for (let y = 0; y < st.d; y++) for (let x = 0; x < st.w; x++) {
+      const c = sl[y * st.w + x];
+      if (!c) continue;
+      const cc = mix(0, c & 0xffffff, lit);
+      const lx = (x + 0.5 - st.w / 2) * K, ly = (y + 0.5 - st.d / 2) * K;
+      for (let oy = -K / 2; oy <= K / 2; oy += 0.5) for (let ox = -K / 2; ox <= K / 2; ox += 0.5) {
+        const rx = (lx + ox) * ca - (ly + oy) * sa, ry = (lx + ox) * sa + (ly + oy) * ca;
+        for (let k = 0; k < K; k++) {
+          const sx = Math.round(cx + rx), sy = Math.round(cy + ry * 0.6 - z * K * 0.8 - k * 0.8);
+          if (sx >= 0 && sy >= 0 && sx < W && sy < H) out[sy * W + sx] = abgr(cc);
+        }
+      }
+    }
+  }
+}
+function shipPicker(time: number): void {
+  const out = R.hud;
+  for (let i = 0; i < W * H; i++) out[i] = 0xd8100804;
+  const title = 'CHOOSE YOUR SHIP', cw = 140, gap = 10, x0 = Math.round((W - (3 * cw + 2 * gap)) / 2), y0 = 34, ch = 196;
+  drawText(out, W, H, title, Math.round(W / 2 - title.length * 4), 12, C_TEXT, 0xff0a0605, 2);
+  const stat = (x: number, y: number, label: string, v: number, c: number) => {
+    drawText(out, W, H, label, x, y, C_DIM);
+    fill(out, x + 40, y, 80, 5, abgr(0x1a2238));
+    fill(out, x + 40, y, Math.max(2, Math.round(80 * Math.min(1, v))), 5, abgr(c));
+  };
+  HULLS.forEach((h, i) => {
+    const x = x0 + i * (cw + gap), sel = i === pickIdx, info = HULL_INFO[h], acc = sel ? 0x7ff8ff : 0x2f4a78;
+    fill(out, x, y0, cw, ch, abgr(sel ? 0x0e1830 : 0x0a1020));
+    fill(out, x, y0, cw, 1, abgr(acc)); fill(out, x, y0 + ch - 1, cw, 1, abgr(acc)); fill(out, x, y0, 1, ch, abgr(acc)); fill(out, x + cw - 1, y0, 1, ch, abgr(acc));
+    drawText(out, W, H, `${i + 1}`, x + 5, y0 + 5, abgr(sel ? 0x7ff8ff : 0x4a5670));
+    stackSprite(out, models.get(`${h}:0`)!.stack, x + cw / 2, y0 + 58, (sel ? time * 1.1 : 0.6) + i, sel ? 4 : 3);
+    const nm = info.name;
+    drawText(out, W, H, nm, Math.round(x + cw / 2 - nm.length * 4), y0 + 86, abgr(sel ? 0xffffff : 0xb0bcd0), 0xff0a0605, 2);
+    drawText(out, W, H, info.role, Math.round(x + cw / 2 - info.role.length * 2), y0 + 100, abgr(0xffc47a));
+    let y = y0 + 112;
+    const sp = tune[`${h}_speed`], tr = tune[`${h}_turn`], en = tune[`${h}_energy`], gr = tune[`${h}_barrels`] / tune[`${h}_gun_interval`];
+    stat(x + 8, y, 'SPEED', sp / 450, 0x62c6ff); y += 8;
+    stat(x + 8, y, 'TURN', tr / 6.6, 0x62c6ff); y += 8;
+    stat(x + 8, y, 'ENERGY', en / 2900, 0x6dffb4); y += 8;
+    stat(x + 8, y, 'GUNS', gr / 10, 0xffd060); y += 8;
+    stat(x + 8, y, 'BOMBS', tune[`${h}_bomb_level`] / 2, 0xff7ac0); y += 11;
+    for (const l of info.lines) { drawText(out, W, H, l, x + 8, y, C_TEXT); y += 8; }
+    y += 3;
+    drawText(out, W, H, 'Q  ' + info.move, x + 8, y, abgr(0x9affd8));
+  });
+  const hint = world.ships[ME].alive ? 'LEFT RIGHT TO CHOOSE   ENTER TO LAUNCH   X TO CLOSE' : 'LEFT RIGHT TO CHOOSE   ENTER: YOUR NEXT LAUNCH';
+  drawText(out, W, H, hint, Math.round(W / 2 - hint.length * 2), y0 + ch + 8, Math.sin(time * 4) > -0.4 ? C_TEXT : C_DIM);
+}
+
+// ---- race mode (R): a timed loop of gates through open space ----------------------------------------
+interface Race { gates: { x: number; y: number }[]; next: number; t: number; running: boolean }
+let race: Race | null = null;
+let raceBest = (() => { try { return Number(localStorage.getItem(`bw-race-best-${seed}`)) || 0; } catch { return 0; } })();
+const GATE_R = 52;
+let course: { x: number; y: number }[] | null = null;
+/** Eight gates on a wide ring round the hub, each nudged to the nearest clear spot, then back to the first. */
+function raceCourse(): { x: number; y: number }[] {
+  const c = map.centre * TILE, R0 = world.size * (openWorld ? 0.17 : 0.3), n = 8, pts: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + 0.4 + 0.25 * Math.sin(i * 2.3), rr0 = R0 * (0.8 + 0.4 * ((i * 37) % 10) / 10);
+    let found: { x: number; y: number } | null = null;
+    for (let rr = 0; rr < 1600 && !found; rr += 32) for (let k = 0; k < 16 && !found; k++) {
+      const b = (k / 16) * Math.PI * 2, x = c + Math.cos(a) * rr0 + Math.cos(b) * rr, y = c + Math.sin(a) * rr0 + Math.sin(b) * rr;
+      if (!hitsWall(map, x, y, 90) && !inSafe(map, x, y)) found = { x, y };
+    }
+    if (found) pts.push(found);
+  }
+  return [...pts, pts[0]];
+}
+function toggleRace(): void {
+  if (race) { race = null; ui.pointAt = null; ui.say('RACE OFF', C_DIM_RGB); return; }
+  if (!world.ships[ME].alive) return;
+  course ??= raceCourse();
+  race = { gates: course, next: 0, t: 0, running: false };
+  ui.say('RACE: FLY THROUGH THE GATES. THE CLOCK STARTS AT THE FIRST', 0x7ff8ff);
+}
+const C_DIM_RGB = 0x7f9fcc;
+const fmt = (t: number): string => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+function raceStep(): void {
+  if (!race) return;
+  const me = world.ships[ME];
+  if (!me.alive) { race = null; ui.pointAt = null; ui.say('RACE LOST: YOU WERE DOWNED', 0xff5a4a); return; }
+  me.shield = Math.max(me.shield, 0.2); // racers are ghosts: no damage taken or dealt until the race ends
+  if (race.running) race.t += STEP;
+  const g = race.gates[race.next];
+  let dx = me.x - g.x, dy = me.y - g.y;
+  const half = world.size / 2;
+  if (dx > half) dx -= world.size; if (dx < -half) dx += world.size; if (dy > half) dy -= world.size; if (dy < -half) dy += world.size;
+  if (dx * dx + dy * dy < GATE_R * GATE_R) {
+    flashes.push({ x: g.x, y: -g.y, z: SHIP_Z + 4, r: 140, life: 0, max: 0.35, cr: 0.6, cg: 1.5, cb: 1.6, ring: GATE_R });
+    if (race.next === 0) { race.running = true; race.t = 0; }
+    sfx.gate(race.next);
+    race.next++;
+    if (race.next >= race.gates.length) {
+      const t = race.t, best = !raceBest || t < raceBest;
+      if (best) { raceBest = t; try { localStorage.setItem(`bw-race-best-${seed}`, `${t}`); } catch { /* private mode */ } }
+      ui.bannerShow('FINISH', fmt(t), best ? 'NEW BEST!' : `BEST ${fmt(raceBest)}`, 0x7ff8ff);
+      sfx.finish(best);
+      race = null; ui.pointAt = null; return;
+    }
+  }
+  const n = race.gates[race.next];
+  ui.pointAt = { x: n.x, y: n.y, c: 0x7ff8ff, label: race.next === race.gates.length - 1 ? 'FINISH' : `GATE ${race.next + 1}`, sub: '' };
+}
+function drawGates(time: number, lights: Light[]): void {
+  if (!race) return;
+  for (let i = race.next; i < Math.min(race.gates.length, race.next + 3); i++) {
+    const g = race.gates[i], x = g.x, y = -g.y, nxt = i === race.next;
+    const col = nxt ? 0x7ff8ff : 0x2f6a8a, pts = 28;
+    for (let k = 0; k < pts; k++) {
+      const a = (k / pts) * Math.PI * 2 + time * (nxt ? 0.8 : 0.2);
+      R.drawPoint(x + Math.cos(a) * GATE_R, y + Math.sin(a) * GATE_R, SHIP_Z, col, nxt ? 2.4 : 1.6);
+    }
+    if (nxt) {
+      R.glow(x, y, SHIP_Z, 10 + 3 * Math.sin(time * 5), 0.3, 0.9, 1.0);
+      lights.push({ x, y, z: SHIP_Z + 10, r: 150, cr: 0.3, cg: 0.9, cb: 1.0, halo: 0 });
+    }
+  }
+}
+function raceHud(out: Uint32Array): void {
+  if (!race) return;
+  const t = race.running ? fmt(race.t) : 'READY', gate = `GATE ${Math.min(race.next, race.gates.length - 1)}/${race.gates.length - 1}`;
+  const y = 40, c = abgr(0x7ff8ff);
+  drawText(out, W, H, 'RACE  R TO QUIT', 4, y, C_DIM);
+  drawText(out, W, H, t, 4, y + 8, c, 0xff0a0605, 2);
+  drawText(out, W, H, gate, 4, y + 22, C_TEXT);
+  if (raceBest) drawText(out, W, H, `BEST ${fmt(raceBest)}`, 4, y + 30, abgr(0xffd060));
+}

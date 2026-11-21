@@ -6,7 +6,7 @@
 
 import { inSafe, type ZoneMap } from '../../src/game/map';
 import { bombLevel, gunLevel, lvl, maxEnergy, mineMax, regen } from '../../src/game/salvage';
-import type { GameEvent, Ship, Tuning, Upgrade, World } from '../../src/game/types';
+import { HULL_ABILITY, type GameEvent, type Ship, type Tuning, type Upgrade, type World } from '../../src/game/types';
 import { drawText, textWidth } from './render/font';
 import type { Renderer } from './render/raster';
 import type { Sfx } from './sfx';
@@ -36,7 +36,20 @@ const ICON: Record<string, string[]> = {
   coin: ['..###..', '.##+##.', '##+####', '#######', '#######', '.#####.', '..###..'],
   bolt: ['...##', '..##.', '.##..', '####.', '..##.', '.##..', '##...'],
   flame: ['..#..', '.##..', '.###.', '##+##', '#+++#', '.###.'],
+  dash: [
+    '.........', '.#...#...', '..#...#..', '...#...#.', '....#...#', '...#...#.', '..#...#..', '.#...#...', '.........', '.........', '.........',
+  ],
+  scatter: [
+    '....#....', '.#..+..#.', '..#...#..', '.........', '#+..#..+#', '.........', '..#...#..', '.#..+..#.', '....#....', '.........', '.........',
+  ],
+  repulse: [
+    '..#####..', '.#.....#.', '#..###..#', '#.#...#.#', '#.#.+.#.#', '#.#...#.#', '#..###..#', '.#.....#.', '..#####..', '.........', '.........',
+  ],
+  crown: ['#.#.#', '#####', '#+#+#', '#####'],
 };
+/** Bounty a pilot needs before they can be the most wanted. */
+const WANTED_MIN = 40;
+const ABILITY_NAME = { dash: 'DASH', scatter: 'SCATTER', repulse: 'REPULSE' } as const;
 
 const UPGRADE_NAME: Record<Upgrade, string> = {
   cells: 'ENERGY CELLS', regen: 'RECHARGE', engine: 'ENGINE', turn: 'TURNING', guns: 'GUNS',
@@ -73,8 +86,12 @@ export class Ui {
   private coins: Coin[] = []; private banner: Banner | null = null; private feed: Feed[] = [];
   private marks: Mark[] = []; private pops: Pop[] = []; private toast: Pop | null = null;
   private edge = { c: GOLD, a: 0, t: 0, max: 1 };
-  private slotFlash = [0, 0, 0, 0];
+  private slotFlash = [0, 0, 0, 0, 0];
   private lastHit = new Map<number, number>();
+  /** The pilot with the top bounty (at least `WANTED_MIN`), or -1: crowned, and an arrow points to them. */
+  wantedId = -1;
+  private runs = new Map<number, number>(); // kills since last downed, per pilot
+  private callout: { text: string; c: number; t: number } | null = null;
 
   constructor(private d: UiDeps) { this.W = d.W; this.H = d.H; this.scoreShown = d.world.ships[d.me].points; }
 
@@ -130,6 +147,7 @@ export class Ui {
         this.slotFlash[ev.kind === 'bullet' ? 0 : 1] = 0.14;
         if (ev.kind === 'bullet') sfx.shoot(); else sfx.bomb();
       } else if (ev.type === 'mine' && ev.ship === me) { this.slotFlash[2] = 0.14; sfx.mine(); }
+      else if (ev.type === 'ability' && ev.ship === me) this.slotFlash[4] = 0.2;
       else if (ev.type === 'hit') {
         const target = ships[ev.ship];
         if (ev.by === me && ev.ship !== me) {
@@ -147,7 +165,17 @@ export class Ui {
         const nm = (s: Ship): string => (s.id === me ? 'YOU' : s.name.replace('BOT ', ''));
         this.feed.unshift({ a: killer ? nm(killer) : 'THE ZONE', b: nm(victim), ac: killer?.id === me ? CYAN : ORANGE, bc: victim.id === me ? CYAN : ORANGE, t: 0 });
         if (this.feed.length > 4) this.feed.length = 4;
-        if (ev.by === me && ev.ship !== me) this.onKill(victim, ev.bounty);
+        if (ev.by === me && ev.ship !== me) this.onKill(victim, ev.bounty, victim.id === this.wantedId);
+        // streak callouts for everyone: the zone hears about a pilot on a run, and who ended it
+        const run = this.runs.get(ev.ship) ?? 0;
+        this.runs.set(ev.ship, 0);
+        if (killer && killer !== victim) {
+          const k = (this.runs.get(killer.id) ?? 0) + 1;
+          this.runs.set(killer.id, k);
+          const CALL: Record<number, string> = { 3: 'ON A STREAK', 5: 'UNSTOPPABLE', 8: 'A LEGEND' };
+          if (CALL[k]) this.callout = { text: `${nm(killer)} ${killer.id === me ? 'ARE' : 'IS'} ${CALL[k]} (${k})`, c: killer.id === me ? CYAN : ORANGE, t: 0 };
+          else if (run >= 3) this.callout = { text: `${nm(killer)} ENDED ${nm(victim)}'S STREAK`, c: killer.id === me ? CYAN : GOLD, t: 0 };
+        }
         if (ev.ship === me) {
           this.streak = 0; this.multi = 0;
           this.deadMax = this.d.tune.respawn_time;
@@ -169,7 +197,7 @@ export class Ui {
   }
 
   /** The kill moment: freeze a beat, kick the camera, banner, coins to the score, fanfare. */
-  private onKill(victim: Ship, paid: number): void {
+  private onKill(victim: Ship, paid: number, wanted = false): void {
     this.streak++;
     this.multi = this.t - this.lastKillT < 4 ? this.multi + 1 : 1;
     this.lastKillT = this.t;
@@ -178,7 +206,7 @@ export class Ui {
     const MULTI = ['', '', 'DOUBLE!', 'TRIPLE!', 'QUADRUPLE!'];
     const name = victim.name.replace('BOT ', '');
     this.banner = {
-      text: 'TARGET DOWN', sub: `${name}  +${paid}`,
+      text: wanted ? 'MOST WANTED DOWN' : 'TARGET DOWN', sub: `${name}  +${paid}`,
       top: this.multi >= 2 ? (MULTI[this.multi] ?? `${this.multi} IN A ROW!`) : this.streak >= 3 ? `STREAK ${this.streak}` : '',
       c: GOLD, t: 0, max: 1.7,
     };
@@ -195,6 +223,13 @@ export class Ui {
     }
   }
 
+  /** A big banner (the race finish, for example). */
+  bannerShow(text: string, sub: string, top: string, c: number, max = 2.2): void { this.banner = { text, sub, top, c, t: 0, max }; this.flashEdge(c, 0.3, 0.5); }
+  /** A one-line callout under the badges. */
+  say(text: string, c: number): void { this.callout = { text, c, t: 0 }; }
+  /** Something the HUD should point at (the next race gate): drawn as an edge arrow when off screen. */
+  pointAt: { x: number; y: number; c: number; label: string; sub: string } | null = null;
+
   /** The camera's zoom kick on a kill (a multiplier on the view's scale). */
   get zoomKick(): number { return this.kickT < 0.4 ? 1 + 0.045 * Math.sin(Math.PI * this.kickT / 0.4) : 1; }
   /** The kill's screen shake, in world-sized pixels (small and quick: eye strain matters). */
@@ -208,7 +243,7 @@ export class Ui {
     const me = this.d.world.ships[this.d.me];
     this.t += dt; this.kickT += dt; this.shakeT += dt;
     this.scorePop = Math.max(0, this.scorePop - dt); this.bountyPop = Math.max(0, this.bountyPop - dt); this.killsPop = Math.max(0, this.killsPop - dt);
-    for (let i = 0; i < 4; i++) this.slotFlash[i] = Math.max(0, this.slotFlash[i] - dt);
+    for (let i = 0; i < 5; i++) this.slotFlash[i] = Math.max(0, this.slotFlash[i] - dt);
     if (me.bounty > this.lastBounty) this.bountyPop = 0.35;
     this.lastBounty = me.bounty;
     // the damage trail: the lost part of the bar waits a moment, then drains away
@@ -218,6 +253,16 @@ export class Ui {
     if (this.banner && (this.banner.t += dt) > this.banner.max) this.banner = null;
     if (this.place && (this.place.t += dt) > 3.2) this.place = null;
     if (this.toast && (this.toast.t += dt) > this.toast.max) this.toast = null;
+    if (this.callout && (this.callout.t += dt) > 3) this.callout = null;
+    // most wanted: the top bounty in the zone, once it is worth chasing
+    let best = -1, bb = WANTED_MIN - 1;
+    for (const s of this.d.world.ships) if (s.alive && s.bounty > bb) { bb = s.bounty; best = s.id; }
+    if (best !== this.wantedId && best >= 0) {
+      const s = this.d.world.ships[best];
+      this.callout = { text: best === this.d.me ? 'YOU ARE THE MOST WANTED PILOT' : `${s.name.replace('BOT ', '')} IS MOST WANTED: ${s.bounty}`, c: GOLD, t: 0 };
+      this.d.sfx.wanted();
+    }
+    this.wantedId = best;
     for (const f of this.feed) f.t += dt;
     this.feed = this.feed.filter(f => f.t < 6);
     for (const m of this.marks) m.t += dt;
@@ -244,7 +289,13 @@ export class Ui {
     this.aimLine();
     this.tags();
     this.markers();
+    this.wanted();
+    if (this.pointAt) this.edgeArrow(this.pointAt.x, this.pointAt.y, this.pointAt.c, this.pointAt.label);
     this.badges();
+    if (this.callout) {
+      const c = this.callout, a = Math.round(255 * clamp01(Math.min(c.t / 0.15, (3 - c.t) / 0.6)));
+      this.textC(c.text, this.W / 2, this.H - 72, c.c, 1, a);
+    }
     this.killFeed();
     this.bottom();
     this.bannerDraw();
@@ -296,6 +347,7 @@ export class Ui {
       const name = sh.name.replace('BOT ', ''), b = `${sh.bounty}`;
       const w = textWidth(name) + 4 + textWidth(b), x = Math.round(p[0] - w / 2), y = Math.round(p[1] - 14);
       if (x < -40 || x > this.W + 40 || y < -20 || y > this.H + 20) continue;
+      if (x + w > this.W - 72 && y > this.H - 84) continue; // keep the radar clear
       this.text(name, x, y, 0xffc47a);
       this.text(b, x + textWidth(name) + 4, y, GOLD);
       const f = clamp01(sh.energy / maxEnergy(sh, tune)), bw = 18, bx = Math.round(p[0] - bw / 2), by = y + 7;
@@ -337,6 +389,48 @@ export class Ui {
     }
   }
 
+  /** The most wanted pilot: a gold crown over them, or an arrow at the screen's edge with the range. */
+  private wanted(): void {
+    const id = this.wantedId, { world, me } = this.d;
+    if (id < 0 || id === me) return;
+    const sh = world.ships[id], pulse = Math.round(200 + 55 * Math.sin(this.t * 6));
+    const p = this.d.R.project(sh.x, -sh.y, this.d.shipZ + 14);
+    const W = this.W, H = this.H, m = 14;
+    if (p && p[0] > m && p[0] < W - m && p[1] > m + 30 && p[1] < H - 44) {
+      this.icon('crown', Math.round(p[0]) - 2, Math.round(p[1]) - 21, GOLD, 1, pulse);
+      return;
+    }
+    if (this.pointAt) return; // racing: one arrow at a time
+    this.edgeArrow(sh.x, sh.y, GOLD, `${sh.name.replace('BOT ', '')} ${sh.bounty}`, true);
+  }
+
+  /** An arrow on the screen's edge towards a spot in the zone (when it is off screen), with a label and the range in tiles. */
+  private edgeArrow(wx: number, wy: number, cc: number, label: string, crown = false): void {
+    const { world, me } = this.d, W = this.W, H = this.H, m = 14, pulse = Math.round(200 + 55 * Math.sin(this.t * 6));
+    const pr = this.d.R.project(wx, -wy, this.d.shipZ);
+    if (pr && pr[0] > m && pr[0] < W - m && pr[1] > m + 30 && pr[1] < H - 44) return;
+    const my = world.ships[me], half = world.size / 2;
+    let dx = wx - my.x, dy = wy - my.y;
+    if (dx > half) dx -= world.size; if (dx < -half) dx += world.size;
+    if (dy > half) dy -= world.size; if (dy < -half) dy += world.size;
+    const c0 = this.screen(my.x, my.y), c1 = this.screen(my.x + dx * 0.01, my.y + dy * 0.01);
+    if (!c0 || !c1) return;
+    const ax = c1[0] - c0[0], ay = c1[1] - c0[1], al = Math.hypot(ax, ay) || 1, ux = ax / al, uy = ay / al;
+    const cx = W / 2, cy = H / 2, k = Math.min((W / 2 - m - 10) / Math.max(1e-3, Math.abs(ux)), (H / 2 - m - 26) / Math.max(1e-3, Math.abs(uy)));
+    const x = cx + ux * k, y = cy + uy * k, c = col(cc, pulse);
+    for (let i = 0; i < 7; i++) for (let j = -i; j <= i; j++) { // a small filled triangle
+      const bx = x + ux * (6 - i) - uy * j * 0.6, by = y + uy * (6 - i) + ux * j * 0.6;
+      this.put(Math.round(bx), Math.round(by), c);
+    }
+    const dist = `${Math.round(Math.hypot(dx, dy) / 16)}`;
+    // the label sits inward from the arrow, far enough that it never covers it
+    const off = 12 + textWidth(label) / 2 * Math.abs(ux) + 8 * Math.abs(uy);
+    const lx = Math.max(4 + textWidth(label) / 2, Math.min(W - 4 - textWidth(label) / 2, x - ux * off)), ly = y - uy * off;
+    if (crown) this.icon('crown', Math.round(lx) - 2, Math.round(ly) - 9, GOLD);
+    this.textC(label, lx, ly - 3, cc);
+    this.textC(dist, lx, ly + 5, DIM);
+  }
+
   /** Kills, score and bounty as three badges at the top. */
   private badges(): void {
     const me = this.d.world.ships[this.d.me], cx = this.W / 2;
@@ -374,11 +468,12 @@ export class Ui {
   private bottom(): void {
     const { world, me, tune, map } = this.d, sh = world.ships[me], W = this.W, H = this.H;
     if (!sh.alive) {
-      const f = clamp01(1 - sh.respawn / this.deadMax), bw = 120, bx = (W - bw) / 2, by = H - 20;
-      this.panel(bx - 4, by - 12, bw + 8, 22, RED);
+      const f = clamp01(1 - sh.respawn / this.deadMax), bw = 140, bx = (W - bw) / 2, by = H - 26;
+      this.panel(bx - 4, by - 12, bw + 8, 30, RED);
       this.textC(`RELAUNCHING IN ${Math.ceil(sh.respawn)}`, W / 2, by - 8, WHITE);
       this.rect(bx, by, bw, 4, col(0x1a2238, 230));
       this.rect(bx, by, Math.round(bw * f), 4, col(CYAN));
+      this.textC(`X  CHANGE SHIP (NEXT: ${sh.nextHull.toUpperCase()})`, W / 2, by + 7, DIM);
       return;
     }
     const maxE = maxEnergy(sh, tune), E = Math.max(0, sh.energy), frac = clamp01(E / maxE);
@@ -392,11 +487,16 @@ export class Ui {
       { icon: 'bomb', key: 'F', c: 0xff7ac0, cool: Math.max(0, sh.bombCool) / tune.bomb_interval, ok: E > bombCost + 1, pips: bl, pipMax: 3, weapon: true, on: false },
       { icon: 'mine', key: 'E', c: RED, cool: live >= mmax ? 1 : Math.max(0, sh.mineCool) / tune.mine_cooldown, ok: E > tune.mine_cost + 1 && live < mmax, pips: mmax - live, pipMax: mmax, weapon: true, on: false },
       { icon: 'burn', key: 'SHIFT', c: ORANGE, cool: 0, ok: E > 40, pips: 0, pipMax: 0, weapon: false, on: sh.burning },
+      { icon: HULL_ABILITY[sh.hull], key: 'Q', c: 0x9affd8, cool: Math.max(0, sh.abilityCool) / tune[`${HULL_ABILITY[sh.hull]}_cool`], ok: E > tune[`${HULL_ABILITY[sh.hull]}_cost`] + 1, pips: 0, pipMax: 0, weapon: true, on: false },
     ];
     // one low row: slots on the left, the energy bar on the right, so the chase view keeps your ship clear
     const S = 22, gap = 4, bw = 170, rowW = slots.length * S + (slots.length - 1) * gap + 16 + bw + 26;
     const x0 = Math.round(W / 2 - rowW / 2), y0 = H - 33;
     if (safe) this.textC('SAFE ZONE  WEAPONS OFF', W / 2, y0 - 16, GREEN);
+    else { // the signature move's name over its slot
+      const ax = x0 + 4 * (S + gap) + S / 2;
+      this.textC(ABILITY_NAME[HULL_ABILITY[sh.hull]], ax, y0 - 8, 0x9affd8, 1, sh.abilityCool > 0 ? 120 : 230);
+    }
     slots.forEach((s, i) => {
       const x = x0 + i * (S + gap), off = (s.weapon && safe) || !s.ok, flash = this.slotFlash[i];
       this.rect(x, y0, S, S, col(PANEL, 190));
@@ -450,7 +550,7 @@ export class Ui {
   }
 
   private tipsCard(): void {
-    const W = this.W, H = this.H, pw = 300, ph = 186, px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2) - 6;
+    const W = this.W, H = this.H, pw = 300, ph = 210, px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2) - 6;
     this.rect(0, 0, W, H, col(0x000000, 110));
     this.panel(px, py, pw, ph, CYAN, 235);
     this.frame(px, py, pw, ph, col(0x2f4a78));
@@ -460,6 +560,8 @@ export class Ui {
       ['ARROWS OR WASD', 'TURN AND THRUST: YOU AIM BY TURNING'],
       ['SHIFT', 'AFTERBURNER (USES ENERGY)'],
       ['SPACE', 'GUNS'], ['F', 'BOMB: BIG SPLASH DAMAGE'], ['E', 'DROP A MINE'],
+      ['Q', 'YOUR SHIP\'S MOVE: DASH, SCATTER OR REPULSE'],
+      ['X  /  R', 'CHANGE SHIP  /  START A RACE'],
       ['1 2 3 OR C', 'CAMERA: TOP-DOWN, ISOMETRIC, BEHIND'],
     ];
     for (const [k, d] of keys) { this.text(k, px + 14, y, CYAN); this.text(d, px + 82, y, 0xd2e2f2); y += 8; }
@@ -473,6 +575,7 @@ export class Ui {
       ['FLY INTO VIOLET PODS FOR UPGRADES.', VIOLET],
       ['THE GREEN ZONE IS SAFE: NO DAMAGE, NO WEAPONS.', GREEN],
       ['DOWN HIGH-BOUNTY PILOTS FOR A BIG SCORE.', GOLD],
+      ['THE GOLD CROWN IS THE MOST WANTED PILOT: HUNT THEM.', GOLD],
     ];
     for (const [t, c] of tips) { this.text(t, px + 14, y, c); y += 8; }
     const blink = Math.sin(this.t * 4) > -0.4 ? 255 : 140;

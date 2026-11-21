@@ -57,7 +57,7 @@ export function think(w: World, sh: Ship, tune: Tuning, dt: number): void {
   if (b.think > 0) return;
   b.think = tune.bot_reaction * (0.8 + rand(w) * 0.4);
   b.wobble = (rand(w) - 0.5) * 2 * tune.bot_aim_error;
-  b.wantMine = false;
+  b.wantMine = false; b.wantAbility = false;
 
   // the best target in sight: near, and a fat bounty draws a bot from further away; bots look
   // further for people than for each other, so the fights come to the people in the zone
@@ -76,6 +76,8 @@ export function think(w: World, sh: Ship, tune: Tuning, dt: number): void {
     steerTo(w, m, sh, m.centre * TILE, m.centre * TILE, tune, true);
     b.wantBurn = !!foe && sh.energy > maxE * 0.12;
     if (foe && fd < 160 && !rookie && rand(w) < tune.bot_mine_chance * 3) b.wantMine = true;
+    // a hunted dart dashes for home; a bulwark pushes a close chaser off
+    if (foe && !rookie && (sh.hull === 'dart' || (sh.hull === 'bulwark' && fd < tune.repulse_radius)) && rand(w) < tune.bot_ability_chance * 4) b.wantAbility = true;
     return;
   }
   if (foe) {
@@ -89,6 +91,10 @@ export function think(w: World, sh: Ship, tune: Tuning, dt: number): void {
     b.wantBurn = false;
     b.wantBomb = fd < tune.bot_bomb_range && fd > 90 && sh.energy > maxE * 0.6 && rand(w) < 0.5;
     if (!rookie && fd < tune.bot_keep_range && rand(w) < tune.bot_mine_chance) b.wantMine = true;
+    // signature moves, now and then: a dart dashes in from range, a lancer scatters up close,
+    // a bulwark pushes away a foe that gets too close
+    const close = sh.hull === 'dart' ? fd > tune.bot_keep_range * 1.1 : fd < (sh.hull === 'lancer' ? tune.bot_keep_range : tune.repulse_radius);
+    if (!rookie && close && rand(w) < tune.bot_ability_chance) b.wantAbility = true;
     return;
   }
   b.target = -1;
