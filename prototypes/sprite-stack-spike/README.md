@@ -77,6 +77,28 @@ iso views, **mouse wheel** or **+ / -** zoom, **L** shows the slice viewer, **H*
   - Fixed on the way: with the soft speed cap, holding thrust above the cap kept adding speed
     (regression test in `tests/unit/abilities.test.ts`).
 
+- **Played the reference side by side (Oscar, 2026-11-21: "feels really off, did we not play
+  the reference game"):** the last round only read zubspace's code. This round built and ran it
+  locally (its server plus browser client in headless Chromium; the client's wait for ICE
+  gathering never finishes in the container, so the probe skips that wait) and recorded the
+  ship's state every frame through its `?metrics=1` hook while holding keys.
+  - Measured in the reference (agile ship): top speed 325 px/s, 0 to top in about 1.7 s,
+    reverse thrust the same as forward, turn about 265 deg/s, zero drag (speed held at 325 for
+    seconds with no keys), afterburner adds no speed or thrust and drains a net 5 energy/s,
+    wall bounce keeps about 62%, the drawn ship snaps to 40 directions while the true angle is
+    smooth, the camera sits dead on the ship, 1 world pixel = 1 screen pixel over the whole
+    window, ships drawn at their true size (about 28 px), controls arrows + Ctrl guns + Tab
+    bombs, or WASD + comma guns + period bombs.
+  - Ours, measured the same way (dart): about 194 px/s/s thrust, 330 top, 261 deg/s, zero drag,
+    same snapping and a still camera. The movement matched; what differed was how it looks
+    and how you hold it.
+  - Fixed: the picture now fills the whole window (it was a 480 x 270 box with black bars;
+    `?letterbox` brings it back), ships are drawn at their true size in the reference feel (they
+    were up to 1.3x bigger than they hit), Ctrl and comma fire, Tab and period bomb, slash is the
+    ship's move, and the zone map moved from Tab to Alt (or the backquote key).
+  - Still different on purpose: our open zone is sparse space with few walls, so there is less
+    nearby to judge speed by than in the reference's walled map.
+
 - **More fun: ship classes that feel different, long coasting (Oscar, 2026-11-21):** compared
   with zubspace's settings and movement code (feel only, nothing copied): it has no drag either,
   and its ships differ less in raw numbers than in their special moves. What read as "braking"

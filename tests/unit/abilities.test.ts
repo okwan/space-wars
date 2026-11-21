@@ -113,4 +113,17 @@ describe('movement order and burn options', () => {
     expect(me.vx).toBeLessThanOrEqual(cap + 200 - 2 * 45 + 1);
     expect(me.vx).toBeGreaterThan(cap);
   });
+
+  it('heading_steps 40: thrust and guns use the last of 40 fixed directions the ship has reached', () => {
+    const tune = { ...base, heading_steps: 40 };
+    const { w, me } = setup('lancer', tune); tunes.set(w, tune);
+    const step = Math.PI * 2 / 40;
+    me.a = step * 0.9; // nearly one step round: still pushes straight along x
+    go(w, input({ thrust: true }));
+    expect(me.vy).toBeCloseTo(0, 6);
+    expect(me.vx).toBeGreaterThan(0);
+    me.vx = 0; me.vy = 0; me.a = step * 1.1; // just past it: pushes along the next direction
+    go(w, input({ thrust: true }));
+    expect(Math.atan2(me.vy, me.vx)).toBeCloseTo(step, 6);
+  });
 });

@@ -77,7 +77,7 @@ export class Ui {
   /** The aim line's points in sim px (x, y pairs), from the nose outwards. */
   readonly aimPts: number[] = [];
   private buf!: Uint32Array;
-  private readonly W: number; private readonly H: number;
+  W: number; H: number;
   private t = 0;
   private chipE = -1; private chipHold = 0;
   private scoreShown = 0; private scorePop = 0; private bountyPop = 0; private killsPop = 0; private lastBounty = 0;
@@ -483,8 +483,8 @@ export class Ui {
     const bombCost = tune.bomb_cost + (bl - 1) * tune.bomb_cost_level;
     const live = world.mines.filter(m => m.owner === me).length, mmax = mineMax(sh, tune);
     const slots = [
-      { icon: 'guns', key: 'SPACE', c: CYAN, cool: 0, ok: E > gunCost + 1, pips: gl, pipMax: Math.max(gl, 3), weapon: true, on: false },
-      { icon: 'bomb', key: 'F', c: 0xff7ac0, cool: Math.max(0, sh.bombCool) / tune.bomb_interval, ok: E > bombCost + 1, pips: bl, pipMax: 3, weapon: true, on: false },
+      { icon: 'guns', key: 'CTRL', c: CYAN, cool: 0, ok: E > gunCost + 1, pips: gl, pipMax: Math.max(gl, 3), weapon: true, on: false },
+      { icon: 'bomb', key: 'TAB', c: 0xff7ac0, cool: Math.max(0, sh.bombCool) / tune.bomb_interval, ok: E > bombCost + 1, pips: bl, pipMax: 3, weapon: true, on: false },
       { icon: 'mine', key: 'E', c: RED, cool: live >= mmax ? 1 : Math.max(0, sh.mineCool) / tune.mine_cooldown, ok: E > tune.mine_cost + 1 && live < mmax, pips: mmax - live, pipMax: mmax, weapon: true, on: false },
       { icon: 'burn', key: 'SHIFT', c: ORANGE, cool: 0, ok: E > 40, pips: 0, pipMax: 0, weapon: false, on: sh.burning },
       { icon: HULL_ABILITY[sh.hull], key: 'Q', c: 0x9affd8, cool: Math.max(0, sh.abilityCool) / tune[`${HULL_ABILITY[sh.hull]}_cool`], ok: E > tune[`${HULL_ABILITY[sh.hull]}_cost`] + 1, pips: 0, pipMax: 0, weapon: true, on: false },
@@ -559,7 +559,7 @@ export class Ui {
     const keys: [string, string][] = [
       ['ARROWS OR WASD', 'TURN AND THRUST: YOU AIM BY TURNING'],
       ['SHIFT', 'AFTERBURNER (USES ENERGY)'],
-      ['SPACE', 'GUNS'], ['F', 'BOMB: BIG SPLASH DAMAGE'], ['E', 'DROP A MINE'],
+      ['CTRL OR SPACE', 'GUNS  (COMMA WITH WASD)'], ['TAB OR F', 'BOMB: BIG SPLASH DAMAGE  (PERIOD)'], ['E', 'DROP A MINE'],
       ['Q', 'YOUR SHIP\'S MOVE: DASH, SCATTER OR REPULSE'],
       ['X  /  R', 'CHANGE SHIP  /  START A RACE'],
       ['1 2 3 OR C', 'CAMERA: TOP-DOWN, ISOMETRIC, BEHIND'],

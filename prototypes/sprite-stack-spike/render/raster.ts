@@ -32,10 +32,10 @@ const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => v 
 const INK = 0xff1a0d0a; // ABGR of 0x0a0d1a
 
 export class Renderer {
-  readonly albedo: Uint32Array; readonly sun: Float32Array; readonly depth: Float32Array;
-  readonly flags: Uint8Array; readonly obj: Uint16Array;
-  readonly accR: Float32Array; readonly accG: Float32Array; readonly accB: Float32Array;
-  readonly image: ImageData; readonly out: Uint32Array;
+  albedo!: Uint32Array; sun!: Float32Array; depth!: Float32Array;
+  flags!: Uint8Array; obj!: Uint16Array;
+  accR!: Float32Array; accG!: Float32Array; accB!: Float32Array;
+  image!: ImageData; out!: Uint32Array;
   private readonly lut = buildLut(PALETTE);
   private readonly cloud = fbmTexture(256, 4, 5, 911);
   private readonly tint = fbmTexture(128, 3, 3, 4242);
@@ -71,10 +71,20 @@ export class Renderer {
   /** Screen rectangles the ships were drawn into this frame: x0, y0, x1, y1 (inclusive). */
   private rects: number[] = [];
   /** The HUD, at world resolution: 0 = see-through. Drawn over everything at the end. */
-  readonly hud: Uint32Array;
+  hud!: Uint32Array;
   private flames: number[] = [];
 
-  constructor(readonly W: number, readonly H: number) {
+  constructor(public W: number, public H: number) {
+    this.resize(W, H, 2);
+  }
+
+  /**
+   * Sizes the world-resolution buffers to W x H and the detail buffers to F times that. The
+   * picture fills the whole window this way (no black bars), like the reference game's view.
+   */
+  resize(W: number, H: number, F: number): void {
+    if (this.image && W === this.W && H === this.H && Math.max(1, Math.min(4, Math.round(F))) === this.F) return;
+    this.W = W; this.H = H;
     const n = W * H;
     this.albedo = new Uint32Array(n); this.sun = new Float32Array(n); this.depth = new Float32Array(n);
     this.flags = new Uint8Array(n); this.obj = new Uint16Array(n);
@@ -82,7 +92,7 @@ export class Renderer {
     this.image = new ImageData(W, H);
     this.out = new Uint32Array(this.image.data.buffer);
     this.hud = new Uint32Array(n);
-    this.setScale(2);
+    this.hiW = 0; this.setScale(F);
   }
 
   /** Sets the output scale (whole numbers, 1..4) and sizes the detail buffers for it. */

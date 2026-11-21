@@ -8,7 +8,7 @@
 
 import config from '../../data/config.json';
 import { SAFE, TILE, WALL, hitsWall, tileAt, zoneMap, type Region } from '../../src/game/map';
-import { STEP, step as simStep } from '../../src/game/sim';
+import { heading, STEP, step as simStep } from '../../src/game/sim';
 import { tuningFrom } from '../../src/game/tuning';
 import { inSafe } from '../../src/game/map';
 import { HULL_ABILITY, HULL_RADIUS, HULLS, type Hull, type Ship, type ShipInput } from '../../src/game/types';
@@ -22,7 +22,7 @@ import { Ui } from './ui';
 
 // ---- setup --------------------------------------------------------------------------------------
 const params = new URLSearchParams(location.search);
-const W = 480, H = 270;
+let W = 480, H = 270; // the world's resolution; fit() sizes it to the window
 const tune = tuningFrom(config);
 // Gentler bots for this prototype (Oscar: "I die instantly"): slower to react, looser aim, fire
 // only when well lined up, notice you from nearer, fewer bombs and mines, a longer spawn shield,
@@ -72,7 +72,7 @@ if (feel !== 'classic') Object.assign(tune, {
 // its long-legged one (lancer) and its standard one (bulwark). ?oldfeel brings back the last
 // round's tuning (fast bullets, soft cap, far-apart hulls); ?classic the shared numbers.
 if (feel === 'ref') Object.assign(tune, {
-  turn_after_thrust: 1, burn_regen: 1, overspeed_decel: 0, bounce: 0.62,
+  heading_steps: 40, turn_after_thrust: 1, burn_regen: 1, overspeed_decel: 0, bounce: 0.62,
   burn_speed: 1, burn_thrust: 1, burn_drain: 121,
   dart_speed: 330, dart_thrust: 192, dart_turn: 4.6, dart_energy: 1720, dart_regen: 116, dart_gun_interval: 0.235,
   lancer_speed: 380, lancer_thrust: 172, lancer_turn: 3.65, lancer_energy: 1720, lancer_regen: 116, lancer_gun_interval: 0.245,
@@ -116,16 +116,26 @@ ui.tips = !params.has('manual') && !params.has('bot') && (params.has('tips') || 
 const BULLET = [0, 0x9fe4ff, 0xffe27a, 0xff86e0], BOMB = [0, 0xff8a3a, 0xff4fb0, 0xb07dff];
 
 /**
- * Sizes the canvas to the screen's real pixels: the page is a whole multiple k of the world's
- * 480 x 270 in CSS pixels, and the canvas holds k x devicePixelRatio pixels per world pixel, so
- * the browser shows it 1:1 and never stretches (which smears pixel art when it moves).
+ * Fills the whole window, like the reference game (no black bars). Each world pixel is a whole
+ * number k of CSS pixels, picked so the world stays about 270 pixels tall; the width follows
+ * the window's shape, so a wider screen sees more to the sides. ?letterbox restores the old
+ * fixed 480 x 270 box.
  */
 function fit(): void {
-  const k = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
-  R.setScale(Math.min(4, k * (devicePixelRatio || 1)));
+  const dpr = devicePixelRatio || 1;
+  if (params.has('letterbox')) {
+    W = 480; H = 270;
+    const k = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
+    R.resize(W, H, Math.min(4, k * dpr));
+    canvas.style.width = `${W * k}px`; canvas.style.height = `${H * k}px`;
+  } else {
+    const k = Math.max(1, Math.round(innerHeight / 270));
+    W = Math.ceil(innerWidth / k); H = Math.ceil(innerHeight / k);
+    R.resize(W, H, Math.min(4, k * dpr));
+    canvas.style.width = `${W * k}px`; canvas.style.height = `${H * k}px`;
+  }
   canvas.width = R.hiW; canvas.height = R.hiH;
-  const css = R.hiW / (devicePixelRatio || 1);
-  canvas.style.width = `${css}px`; canvas.style.height = `${css * H / W}px`;
+  ui.W = W; ui.H = H;
 }
 addEventListener('resize', fit); fit();
 
@@ -139,7 +149,7 @@ const ZOOM_MIN = 0.55, ZOOM_MAX = 2.6;
 let zoom = 1;
 // Wider by default (Oscar, 2026-11-20: "should feel more zoomed out"); the top and iso views also
 // pull back with speed, so a fast run shows more of what is coming. ?nospeedzoom turns that off.
-const TOP_SCALE = 0.28, ISO_SCALE = 0.33, SPEED_OUT = params.has('nospeedzoom') ? 0 : 0.22;
+const TOP_SCALE = 0.28, ISO_SCALE = 0.33, SPEED_OUT = params.has('nospeedzoom') || feel === 'ref' ? 0 : 0.22; // the reference camera sits still on the ship
 let speedOut = 0; // 0..1, smoothed share of top speed
 let camScale = TOP_SCALE; // the scale last frame, for sizing ships
 
@@ -179,7 +189,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
     const ka = 1 - Math.exp(-dt * 2.2);
     aheadX += (gx - aheadX) * ka; aheadY += (gy - aheadY) * ka;
   }
-  const wAhead = Math.max(0, Math.min(1, (cam.pitch - 0.34) / 0.32)); // top and iso only; chase leads on its own
+  const wAhead = feel === 'ref' ? 0 : Math.max(0, Math.min(1, (cam.pitch - 0.34) / 0.32)); // top and iso only; chase leads on its own
   const tx = camX + Math.cos(cam.yaw) * cam.lead + aheadX * wAhead, ty = camY + Math.sin(cam.yaw) * cam.lead + aheadY * wAhead;
   let dist = Math.exp(cam.logDist);
   const tz = SHIP_Z + cam.lift;
@@ -209,7 +219,7 @@ function updateCamera(dt: number, sh: Ship): CameraState {
 // ---- input ------------------------------------------------------------------------------------
 const down = new Set<string>();
 addEventListener('keydown', e => {
-  if (e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'Tab') e.preventDefault();
+  if (e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'Tab' || e.code.startsWith('Alt') || e.code === 'Slash' || e.code === 'Quote') e.preventDefault();
   sfx.start();
   if (e.repeat) return;
   if (ui.tips) { // any key closes the card (and is not also flown with)
@@ -249,7 +259,8 @@ const held = (...c: string[]): boolean => c.some(k => down.has(k));
 function readInput(): ShipInput {
   return {
     left: held('ArrowLeft', 'KeyA'), right: held('ArrowRight', 'KeyD'), thrust: held('ArrowUp', 'KeyW'), rev: held('ArrowDown', 'KeyS'),
-    burn: held('ShiftLeft', 'ShiftRight'), fire: held('Space'), bomb: held('KeyF', 'KeyB'), mine: held('KeyE'), ability: held('KeyQ'),
+    burn: held('ShiftLeft', 'ShiftRight'), fire: held('Space', 'ControlLeft', 'ControlRight', 'Comma'), bomb: held('KeyF', 'KeyB', 'Tab', 'Period'), mine: held('KeyE'), ability: held('KeyQ', 'Slash'),
+    // the genre's own hands: Ctrl guns and Tab bombs with the arrows, comma and period with WASD
   };
 }
 const opt = { outline: true, palette: false, dither: false };
@@ -359,9 +370,9 @@ function draw(time: number, dt: number): CameraState {
     }
     bank.set(sh.id, b);
     const rl = b.r;
-    const SK = Math.max(1, Math.min(1.3, Math.sqrt(0.5 / camScale))), V = VOX * SK;
+    const SK = feel === 'ref' ? 1 : Math.max(1, Math.min(1.3, Math.sqrt(0.5 / camScale))), V = VOX * SK; // the reference draws ships at their true size
     const side = sh.id === ME ? 0 : 1, m = models.get(`${sh.hull}:${side}`)!;
-    const x = sh.x, y = -sh.y, yaw = -sh.a, z = SHIP_Z; // no bob: a moving voxel grid shimmers
+    const x = sh.x, y = -sh.y, yaw = -(feel === 'ref' ? heading(sh, tune) : sh.a), z = SHIP_Z; // ref: drawn in its 40 directions // no bob: a moving voxel grid shimmers
     R.drawModelHi(m, x, y, z, yaw, V / 2, 1000 + sh.id, rl, sh.flash > 0 ? 0.6 : 0);
     // thrusters: a soft plume from every nozzle, steady with a slow shimmer, longer on the burner
     const c = Math.cos(yaw), s = Math.sin(yaw);
@@ -434,7 +445,7 @@ function draw(time: number, dt: number): CameraState {
 function aimGuide(me: Ship): void {
   ui.lockId = -1; ui.aimPts.length = 0;
   if (!me.alive || inSafe(map, me.x, me.y)) return;
-  const c = Math.cos(me.a), s = Math.sin(me.a), r = HULL_RADIUS[me.hull];
+  const hd = heading(me, tune), c = Math.cos(hd), s = Math.sin(hd), r = HULL_RADIUS[me.hull];
   const bvx = me.vx + c * tune.gun_speed, bvy = me.vy + s * tune.gun_speed;
   const ox = me.x + c * r, oy = me.y + s * r;
   let best = Infinity;
@@ -461,7 +472,7 @@ function hud(fps: number): void {
   const out = R.hud, me = world.ships[ME];
   drawText(out, W, H, `VIEW ${VIEW_NAME[view]}  (1 2 3 OR C)`, 4, 4, C_BLUE);
   drawText(out, W, H, `M SOUND ${sfx.muted ? 'OFF' : 'ON'}  H HUD  WHEEL ZOOM`, 4, 12, C_DIM);
-  drawText(out, W, H, openWorld ? 'HOLD TAB FOR THE MAP' : 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
+  drawText(out, W, H, openWorld ? 'HOLD ALT FOR THE MAP' : 'DRAG TURNS THE VIEW', 4, 19, C_DIM);
   if (openWorld) drawText(out, W, H, `IN ${hereName}`, 4, 28, abgr(hereColour));
   if (showStats) drawText(out, W, H, `${fps.toFixed(0)} FPS  ${R.stats.quads} QUADS  ${(R.stats.voxels / 1000).toFixed(1)}K VOXELS  ${R.stats.lights} LIGHTS`, 4, 36, C_DIM);
   // radar
@@ -490,7 +501,7 @@ function hud(fps: number): void {
   if (race) { const g = race.gates[race.next]; dot(g.x, g.y, abgr(0x7ff8ff)); dot(g.x + 16, g.y, abgr(0x7ff8ff)); }
   if (race) raceHud(out);
   ui.draw(out);
-  if (openWorld && down.has('Tab')) worldMap(out, me);
+  if (openWorld && (down.has('AltLeft') || down.has('AltRight') || down.has('Backquote'))) worldMap(out, me);
 }
 
 // ---- the open world: where you are, and the map --------------------------------------------------

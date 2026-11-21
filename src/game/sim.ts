@@ -16,6 +16,19 @@ export const STEP = 1 / 60;
 /** Longest move per collision sub-step, px: shorter than a tile, so nothing passes through a wall. */
 const SUB = 6;
 
+/**
+ * The direction a ship thrusts and fires in. With `heading_steps` (e.g. 40) the ship's turn is
+ * cut down to that many fixed directions, as in the classic arena shooters, where a ship turns
+ * smoothly but pushes and shoots only along the last of its 40 directions it has reached;
+ * 0 uses the exact angle.
+ */
+export function heading(sh: Ship, tune: Tuning): number {
+  const n = tune.heading_steps;
+  if (!n) return sh.a;
+  const turns = sh.a / (Math.PI * 2), f = turns - Math.floor(turns);
+  return (Math.floor(f * n) % n) * (Math.PI * 2) / n;
+}
+
 /** Input a bot is giving this step, from its brain. */
 export function botInput(sh: Ship, tune: Tuning): ShipInput {
   const b = sh.brain, err = angDiff(sh.a, b.aimA);
@@ -53,12 +66,12 @@ function fireGuns(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
   const cost = tune.gun_cost + (level - 1) * tune.gun_cost_level + (multi ? tune.multi_cost : 0);
   if (sh.cool > 0 || sh.energy <= cost + 1 || inSafe(m, sh.x, sh.y)) return;
   sh.energy -= cost; sh.cool = tune[`${sh.hull}_gun_interval`];
-  const r = HULL_RADIUS[sh.hull], c = Math.cos(sh.a), s = Math.sin(sh.a);
+  const r = HULL_RADIUS[sh.hull], h = heading(sh, tune), c = Math.cos(h), s = Math.sin(h);
   const barrels = tune[`${sh.hull}_barrels`] > 1 ? [-0.55, 0.55] : [0];
   const shots: [number, number][] = barrels.map(off => [off, 0]); // [side offset in radii, angle]
   if (multi) shots.push([0, -tune.multi_angle], [0, tune.multi_angle]);
   for (const [off, da] of shots) {
-    const a = sh.a + da;
+    const a = h + da;
     w.shots.push({
       owner: sh.id, kind: 'bullet', level,
       x: sh.x + c * r - s * off * r, y: sh.y + s * r + c * off * r,
@@ -73,7 +86,7 @@ function fireBomb(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
   const level = bombLevel(sh, tune), cost = tune.bomb_cost + (level - 1) * tune.bomb_cost_level;
   if (sh.bombCool > 0 || sh.energy <= cost + 1 || inSafe(m, sh.x, sh.y)) return;
   sh.energy -= cost; sh.bombCool = tune.bomb_interval;
-  const r = HULL_RADIUS[sh.hull], c = Math.cos(sh.a), s = Math.sin(sh.a);
+  const r = HULL_RADIUS[sh.hull], h = heading(sh, tune), c = Math.cos(h), s = Math.sin(h);
   w.shots.push({
     owner: sh.id, kind: 'bomb', level, x: sh.x + c * r, y: sh.y + s * r,
     vx: sh.vx + c * tune.bomb_speed, vy: sh.vy + s * tune.bomb_speed, life: tune.bomb_life, bounces: tune[`${sh.hull}_bomb_bounces`],
@@ -105,7 +118,7 @@ function useAbility(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
   w.events.push({ type: 'ability', ship: sh.id, kind });
   if (kind === 'dash') {
     if (tune.dash_time > 0) sh.boost = tune.dash_time; // a timed rocket burn (see fly)
-    else { sh.vx += Math.cos(sh.a) * tune.dash_speed; sh.vy += Math.sin(sh.a) * tune.dash_speed; }
+    else { const h = heading(sh, tune); sh.vx += Math.cos(h) * tune.dash_speed; sh.vy += Math.sin(h) * tune.dash_speed; }
     return;
   }
   if (kind === 'scatter') {
@@ -195,8 +208,9 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
   sh.burning = canBurn;
   const acc = boosting ? tune.dash_thrust : thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
   sh.thrusting = boosting || c.thrust || c.rev;
-  if (boosting || c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
-  else if (c.rev) { sh.vx -= Math.cos(sh.a) * acc * dt; sh.vy -= Math.sin(sh.a) * acc * dt; }
+  const h = heading(sh, tune);
+  if (boosting || c.thrust) { sh.vx += Math.cos(h) * acc * dt; sh.vy += Math.sin(h) * acc * dt; }
+  else if (c.rev) { sh.vx -= Math.cos(h) * acc * dt; sh.vy -= Math.sin(h) * acc * dt; }
   if (tune.turn_after_thrust) rotate();
   sh.boost = Math.max(0, sh.boost - dt);
   // no friction at all: a ship keeps whatever it has, up to its top speed (higher on the burner)
