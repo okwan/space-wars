@@ -9,7 +9,7 @@ import {
   bombDamage, bombLevel, bombRadius, gunDamage, gunLevel, lvl, maxEnergy, mineMax, payBounty, regen, thrust, topSpeed, turnRate, updateSalvage,
 } from './salvage';
 import { launch, randomHull } from './world';
-import { HULL_RADIUS, NO_INPUT, type Ship, type ShipInput, type Shot, type Tuning, type World } from './types';
+import { HULL_ABILITY, HULL_RADIUS, NO_INPUT, type Ship, type ShipInput, type Shot, type Tuning, type World } from './types';
 
 /** Simulation step in seconds: motion is per second, never per frame. */
 export const STEP = 1 / 60;
@@ -22,7 +22,7 @@ export function botInput(sh: Ship, tune: Tuning): ShipInput {
   const aimed = Math.abs(err) < tune.bot_fire_angle;
   return {
     left: err < -0.03, right: err > 0.03, thrust: b.wantThrust, rev: b.wantRev, burn: b.wantBurn,
-    fire: b.wantFire && aimed, bomb: b.wantBomb && aimed, mine: b.wantMine,
+    fire: b.wantFire && aimed, bomb: b.wantBomb && aimed, mine: b.wantMine, ability: !!b.wantAbility,
   };
 }
 
@@ -91,8 +91,54 @@ function dropMine(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
 }
 
 /** Can this ship be hurt right now? Not while spawn-shielded or inside the safe zone. */
+/**
+ * The hull's signature move, if it is ready, affordable and outside the safe zone:
+ * dart dashes forward (past its top speed; `overspeed_decel` bleeds the extra off), lancer
+ * throws a ring of shrapnel, bulwark pushes nearby fire and ships away and takes over the
+ * fire it turns, so a repulsed shot can hit the one who fired it.
+ */
+function useAbility(w: World, m: ZoneMap, sh: Ship, tune: Tuning): void {
+  const kind = HULL_ABILITY[sh.hull];
+  const cost = tune[`${kind}_cost`], cool = tune[`${kind}_cool`];
+  if (sh.abilityCool > 0 || sh.energy <= cost + 1 || inSafe(m, sh.x, sh.y)) return;
+  sh.energy -= cost; sh.abilityCool = cool;
+  w.events.push({ type: 'ability', ship: sh.id, kind });
+  if (kind === 'dash') {
+    if (tune.dash_time > 0) sh.boost = tune.dash_time; // a timed rocket burn (see fly)
+    else { sh.vx += Math.cos(sh.a) * tune.dash_speed; sh.vy += Math.sin(sh.a) * tune.dash_speed; }
+    return;
+  }
+  if (kind === 'scatter') {
+    const n = tune.scatter_shots, level = gunLevel(sh), r = HULL_RADIUS[sh.hull] + 2;
+    for (let i = 0; i < n; i++) {
+      const a = sh.a + (i / n) * Math.PI * 2;
+      w.shots.push({
+        owner: sh.id, kind: 'bullet', level, x: sh.x + Math.cos(a) * r, y: sh.y + Math.sin(a) * r,
+        vx: sh.vx + Math.cos(a) * tune.scatter_speed, vy: sh.vy + Math.sin(a) * tune.scatter_speed, life: tune.scatter_life, bounces: 1,
+      });
+    }
+    return;
+  }
+  // repulse
+  const R = tune.repulse_radius, push = tune.repulse_push;
+  for (const b of w.shots) {
+    if (b.owner === sh.id) continue;
+    const dx = wd(sh.x, b.x, w.size), dy = wd(sh.y, b.y, w.size), d = Math.hypot(dx, dy);
+    if (d > R) continue;
+    const ux = d > 0 ? dx / d : Math.cos(sh.a), uy = d > 0 ? dy / d : Math.sin(sh.a), sp = Math.max(push, Math.hypot(b.vx, b.vy));
+    b.vx = ux * sp; b.vy = uy * sp; b.owner = sh.id;
+  }
+  for (const o of w.ships) {
+    if (o === sh || !o.alive) continue;
+    const dx = wd(sh.x, o.x, w.size), dy = wd(sh.y, o.y, w.size), d = Math.hypot(dx, dy);
+    if (d > R || d === 0) continue;
+    const k = push * 0.7 * (1 - d / R) / d;
+    o.vx += dx * k; o.vy += dy * k;
+  }
+}
+
 export function exposed(w: World, sh: Ship): boolean {
-  return sh.alive && sh.shield <= 0 && !inSafe(zoneMap(w.mapSeed, w.tiles), sh.x, sh.y);
+  return sh.alive && sh.shield <= 0 && !inSafe(zoneMap(w.mapSeed, w.tiles, w.mapStyle), sh.x, sh.y);
 }
 
 /** Takes energy from a ship; at zero it is destroyed. Exposed for tests. */
@@ -134,32 +180,63 @@ export function fly(w: World, sh: Ship, c: ShipInput, tune: Tuning, dt: number):
     if (sh.respawn <= 0) launch(w, sh, tune);
     return;
   }
-  const m = zoneMap(w.mapSeed, w.tiles);
-  const turn = turnRate(sh, tune);
-  if (c.left) sh.a -= turn * dt;
-  if (c.right) sh.a += turn * dt;
-  const canBurn = c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle);
+  // turn_after_thrust: thrust along the heading the ship had at the start of the step, then turn
+  // (the order of the classic arena shooters; with the burn_regen and dash_time options this
+  // follows the movement step of zubspace, MIT, (c) Peter Kieltyka and zubspace contributors,
+  // reimplemented here, not copied); 0 turns first
+  const turn = turnRate(sh, tune), rotate = (): void => {
+    if (c.left) sh.a -= turn * dt;
+    if (c.right) sh.a += turn * dt;
+  };
+  if (!tune.turn_after_thrust) rotate();
+  const boosting = sh.boost > 0, sp0 = Math.hypot(sh.vx, sh.vy); // speed before this step's thrust
+  const canBurn = !boosting && c.burn && (c.thrust || c.rev) && sh.energy > tune.burn_drain * dt + 20;
   sh.burning = canBurn;
-  const acc = thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
-  sh.thrusting = c.thrust || c.rev;
-  if (c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
+  const acc = boosting ? tune.dash_thrust : thrust(sh, tune) * (canBurn ? tune.burn_thrust : 1);
+  sh.thrusting = boosting || c.thrust || c.rev;
+  if (boosting || c.thrust) { sh.vx += Math.cos(sh.a) * acc * dt; sh.vy += Math.sin(sh.a) * acc * dt; }
   else if (c.rev) { sh.vx -= Math.cos(sh.a) * acc * dt; sh.vy -= Math.sin(sh.a) * acc * dt; }
+  if (tune.turn_after_thrust) rotate();
+  sh.boost = Math.max(0, sh.boost - dt);
   // no friction at all: a ship keeps whatever it has, up to its top speed (higher on the burner)
-  const cap = topSpeed(sh, tune) * (canBurn ? tune.burn_speed : 1), sp = Math.hypot(sh.vx, sh.vy);
-  if (sp > cap) { sh.vx *= cap / sp; sh.vy *= cap / sp; }
+  // over the cap (off the burner, after a dash, pushed): back to it at once, or, with
+  // overspeed_decel, eased back so a fast run coasts on instead of stopping dead
+  const cap = Math.max(topSpeed(sh, tune) * (canBurn ? tune.burn_speed : 1), boosting ? tune.dash_top : 0), sp = Math.hypot(sh.vx, sh.vy);
+  if (sp > cap) {
+    // thrust can steer the extra speed but never add to it
+    const to = tune.overspeed_decel > 0 ? Math.max(cap, Math.min(sp, sp0) - tune.overspeed_decel * dt) : cap;
+    sh.vx *= to / sp; sh.vy *= to / sp;
+  }
   const fast = sp > 90;
   if (moveBody(m, sh, HULL_RADIUS[sh.hull], dt, tune.bounce) && fast) w.events.push({ type: 'bounce', ship: sh.id });
+  // burn_regen: energy keeps recharging while the afterburner drains it (0: no recharge while burning)
   if (canBurn) sh.energy -= tune.burn_drain * dt;
-  else sh.energy = Math.min(maxEnergy(sh, tune), sh.energy + regen(sh, tune) * dt);
-  sh.cool -= dt; sh.bombCool -= dt; sh.mineCool -= dt; sh.flash -= dt; sh.shield -= dt;
-  if (sh.shield > 0 && (c.fire || c.bomb || c.mine)) sh.shield = 0; // firing drops spawn protection
+  if (!canBurn || tune.burn_regen) sh.energy = Math.min(maxEnergy(sh, tune), sh.energy + regen(sh, tune) * dt);
+  sh.cool -= dt; sh.bombCool -= dt; sh.mineCool -= dt; sh.abilityCool -= dt; sh.flash -= dt; sh.shield -= dt;
+  if (sh.shield > 0 && (c.fire || c.bomb || c.mine || c.ability)) sh.shield = 0; // firing drops spawn protection
   if (c.fire) fireGuns(w, m, sh, tune);
   if (c.bomb) fireBomb(w, m, sh, tune);
   if (c.mine) dropMine(w, m, sh, tune);
+  if (c.ability) useAbility(w, m, sh, tune);
+}
+
+/**
+ * Did a shot moving from (ax, ay) to (bx, by) this step pass within r of (cx, cy)? Tests the
+ * whole path, not just where it ended, so a fast shot cannot skip through a ship between steps.
+ * Exposed for tests.
+ */
+export function sweptHit(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, r: number, size: number): boolean {
+  const ex = wd(cx, bx, size), ey = wd(cy, by, size); // ship -> shot end, wrapped
+  const dx = wd(bx, ax, size), dy = wd(by, ay, size); // shot end -> shot start
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, -(ex * dx + ey * dy) / len2)) : 0;
+  const qx = ex + dx * t, qy = ey + dy * t;
+  return qx * qx + qy * qy < r * r;
 }
 
 function updateShots(w: World, tune: Tuning, dt: number): void {
-  const m = zoneMap(w.mapSeed, w.tiles), size = w.size;
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle), size = w.size;
   const done = (b: Shot) => {
     b.life = 0;
     if (b.kind === 'bomb') blast(w, b.x, b.y, b.level, b.owner, tune);
@@ -168,16 +245,17 @@ function updateShots(w: World, tune: Tuning, dt: number): void {
   for (const b of w.shots) {
     b.life -= dt;
     if (b.life <= 0) { if (b.kind === 'bomb') done(b); continue; }
+    const px = b.x, py = b.y;
     moveBody(m, b, 0, dt, 1, () => {
       if (b.bounces > 0) { b.bounces--; return true; }
       done(b); return false;
     });
     if (b.life <= 0) continue;
     if (inSafe(m, b.x, b.y)) { b.life = 0; continue; } // the safe zone swallows fire
-    const reach = b.kind === 'bomb' ? 6 : 2;
+    const reach = b.kind === 'bomb' ? 6 : tune.gun_reach;
     for (const sh of w.ships) {
       if (sh.id === b.owner || !sh.alive || sh.shield > 0) continue;
-      if (Math.hypot(wd(b.x, sh.x, size), wd(b.y, sh.y, size)) < HULL_RADIUS[sh.hull] + reach) {
+      if (sweptHit(px, py, b.x, b.y, sh.x, sh.y, HULL_RADIUS[sh.hull] + reach, size)) {
         if (b.kind === 'bomb') { done(b); break; }
         b.life = 0;
         w.events.push({ type: 'burst', x: b.x, y: b.y, n: 4, speed: 110, owner: b.owner });

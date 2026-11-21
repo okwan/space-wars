@@ -26,7 +26,7 @@ const cap = (k: Upgrade, t: Tuning): number => t[`up_${k}_max`];
 
 /** Drops a new pod on a random open tile, away from the safe zone. */
 export function spawnSalvage(w: World, t: Tuning): void {
-  const m = zoneMap(w.mapSeed, w.tiles), mid = w.size / 2;
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle), mid = w.size / 2;
   for (let tries = 0; tries < 20; tries++) {
     const tx = Math.floor(rand(w) * w.tiles), ty = Math.floor(rand(w) * w.tiles);
     if (tileAt(m, tx, ty) !== OPEN || tileAt(m, tx + 1, ty) !== OPEN || tileAt(m, tx, ty + 1) !== OPEN || tileAt(m, tx - 1, ty) !== OPEN || tileAt(m, tx, ty - 1) !== OPEN) continue;
@@ -58,7 +58,7 @@ export function updateSalvage(w: World, t: Tuning, dt: number): void {
   w.salvageClock += dt * t.salvage_rate;
   while (w.salvageClock >= 1) { w.salvageClock -= 1; if (w.salvage.length < t.salvage_max) spawnSalvage(w, t); }
   for (const s of w.salvage) s.age += dt;
-  const m = zoneMap(w.mapSeed, w.tiles);
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle);
   w.salvage = w.salvage.filter(s => {
     if (s.age > t.salvage_life) return false;
     for (const sh of w.ships) {

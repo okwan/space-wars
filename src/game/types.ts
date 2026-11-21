@@ -11,6 +11,9 @@ export type Tuning = Record<TuneKey, number>;
 
 export type Hull = 'dart' | 'lancer' | 'bulwark';
 export const HULLS: readonly Hull[] = ['dart', 'lancer', 'bulwark'];
+/** Each hull's signature move: a forward dash, a ring of shrapnel, a push that turns fire away. */
+export type Ability = 'dash' | 'scatter' | 'repulse';
+export const HULL_ABILITY: Record<Hull, Ability> = { dart: 'dash', lancer: 'scatter', bulwark: 'repulse' };
 /** Salvage upgrades, in the order a ship's `up` levels are kept and sent. */
 export const UPGRADES = ['cells', 'regen', 'engine', 'turn', 'guns', 'bombs', 'bounce', 'multi', 'mines'] as const;
 export type Upgrade = typeof UPGRADES[number];
@@ -25,6 +28,8 @@ export interface ShipInput {
   burn: boolean; fire: boolean; bomb: boolean; mine: boolean;
   /** The hull to launch with next (applies at respawn). */
   hull?: Hull;
+  /** The hull's signature move (dart: dash, lancer: scatter, bulwark: repulse). */
+  ability?: boolean;
 }
 export const NO_INPUT: ShipInput = { left: false, right: false, thrust: false, rev: false, burn: false, fire: false, bomb: false, mine: false };
 
@@ -35,7 +40,7 @@ export interface BotBrain {
   path: { x: number; y: number }[]; replan: number; goalX: number; goalY: number;
   /** Seconds spent barely moving while trying to fly; past a limit the bot backs off a wall. */
   stuck: number;
-  wantThrust: boolean; wantRev: boolean; wantBurn: boolean; wantFire: boolean; wantBomb: boolean; wantMine: boolean;
+  wantThrust: boolean; wantRev: boolean; wantBurn: boolean; wantFire: boolean; wantBomb: boolean; wantMine: boolean; wantAbility?: boolean;
 }
 
 export interface Ship {
@@ -45,8 +50,10 @@ export interface Ship {
   hull: Hull; nextHull: Hull;
   x: number; y: number; vx: number; vy: number; a: number;
   energy: number; alive: boolean; respawn: number;
-  /** Cooldowns: guns, bombs, mines. Seconds. */
-  cool: number; bombCool: number; mineCool: number;
+  /** Cooldowns: guns, bombs, mines, the hull's ability. Seconds. */
+  cool: number; bombCool: number; mineCool: number; abilityCool: number;
+  /** Seconds of dash boost left (a rocket-style burn: forward thrust and a higher cap; see dash_time). */
+  boost: number;
   /** Seconds of spawn protection left (no damage taken, none dealt). */
   shield: number;
   thrusting: boolean; burning: boolean; flash: number;
@@ -77,13 +84,19 @@ export type GameEvent =
   | { type: 'blast'; x: number; y: number; r: number; owner: number }
   | { type: 'bounce'; ship: number }
   | { type: 'mine'; ship: number }
+  | { type: 'ability'; ship: number; kind: Ability }
   | { type: 'salvage'; ship: number; kind: Upgrade; level: number };
 
 /** The whole zone. Everything the rules need, nothing the screen needs. */
+/** How the zone's map is laid out: the walled arena, or a wide open world of named regions. */
+export type MapStyle = 'arena' | 'open';
+
 export interface World {
   seed: number; // the rng's running state
   /** The map: its seed and its size in tiles; `size` is the same in px. */
   mapSeed: number; tiles: number; size: number;
+  /** The map's layout; absent means the arena. */
+  mapStyle?: MapStyle;
   t: number;
   ships: Ship[]; shots: Shot[]; mines: Mine[];
   salvage: Salvage[]; nextSalvage: number; salvageClock: number;

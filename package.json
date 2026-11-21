@@ -15,7 +15,9 @@
     "test:e2e": "npm run build:single && playwright test",
     "smoke": "npm run build:single && playwright test --grep @boot",
     "build:server": "tsc --noEmit -p server && vite build --config vite.server.config.ts",
-    "server": "npm run build:server && node dist-server/main.js"
+    "server": "npm run build:server && node dist-server/main.js",
+    "proto:stack": "vite prototypes/sprite-stack-spike",
+    "proto:stack:build": "tsc --noEmit -p prototypes/sprite-stack-spike && vite build prototypes/sprite-stack-spike"
   },
   "dependencies": {
     "pixi.js": "8.22.0",

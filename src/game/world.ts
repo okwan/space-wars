@@ -4,7 +4,7 @@
 import { rand } from './math';
 import { NAV, SAFE, TILE, tileAt, zoneMap } from './map';
 import { seedSalvage } from './salvage';
-import { HULLS, UPGRADES, type Hull, type Ship, type Tuning, type World } from './types';
+import { HULLS, UPGRADES, type Hull, type MapStyle, type Ship, type Tuning, type World } from './types';
 
 /** Bot call signs: the game's own, chosen to read as people. */
 export const BOT_NAMES = ['Rook', 'Vex', 'Sable', 'Quill', 'Juno', 'Brisk', 'Talon', 'Moss', 'Pike', 'Wren', 'Cinder',
@@ -17,7 +17,7 @@ export function randomHull(w: { seed: number }): Hull { return HULLS[Math.floor(
 function newShip(id: number, name: string): Ship {
   return {
     id, name, human: false, hull: 'lancer', nextHull: 'lancer',
-    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, bombCool: 0, mineCool: 0, shield: 0,
+    x: 0, y: 0, vx: 0, vy: 0, a: 0, energy: 0, alive: false, respawn: 0, cool: 0, bombCool: 0, mineCool: 0, abilityCool: 0, boost: 0, shield: 0,
     thrusting: false, burning: false, flash: 0, kills: 0, deaths: 0, lastHitBy: -1,
     up: UPGRADES.map(() => 0), bounty: 0, points: 0,
     brain: {
@@ -34,6 +34,8 @@ export interface WorldOptions {
   mapSeed?: number;
   /** Ship ids that start as human seats (default: ship 0). */
   humans?: number[];
+  /** The map's layout (default: the arena). */
+  mapStyle?: MapStyle;
 }
 
 /**
@@ -46,6 +48,7 @@ export function newWorld(tune: Tuning, opts: WorldOptions): World {
     seed: opts.seed | 0, mapSeed: (opts.mapSeed ?? opts.seed) | 0, tiles, size: tiles * TILE, t: 0,
     ships: [], shots: [], mines: [], events: [], salvage: [], nextSalvage: 0, salvageClock: 0,
   };
+  if (opts.mapStyle && opts.mapStyle !== 'arena') w.mapStyle = opts.mapStyle;
   const names = BOT_NAMES.slice();
   for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(rand(w) * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
   const humans = opts.humans ?? [0];
@@ -65,7 +68,7 @@ export function newWorld(tune: Tuning, opts: WorldOptions): World {
  * the start of a zone, anywhere open in the map so the zone is busy from the first second).
  */
 export function launch(w: World, sh: Ship, tune: Tuning, out = false): void {
-  const m = zoneMap(w.mapSeed, w.tiles);
+  const m = zoneMap(w.mapSeed, w.tiles, w.mapStyle);
   sh.hull = sh.nextHull;
   let x = m.centre * TILE, y = m.centre * TILE;
   for (let tries = 0; tries < 60; tries++) {
@@ -80,7 +83,7 @@ export function launch(w: World, sh: Ship, tune: Tuning, out = false): void {
   }
   sh.x = x; sh.y = y; sh.vx = 0; sh.vy = 0; sh.a = rand(w) * Math.PI * 2;
   sh.up = UPGRADES.map(() => 0); sh.bounty = tune.bounty_start; // a fresh ship: no salvage, base bounty
-  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.bombCool = 0.5; sh.mineCool = 0.5;
+  sh.energy = tune[`${sh.hull}_energy`]; sh.alive = true; sh.cool = 0.3; sh.bombCool = 0.5; sh.mineCool = 0.5; sh.abilityCool = 1; sh.boost = 0;
   sh.flash = 0; sh.respawn = 0; sh.shield = out ? 0 : tune.spawn_shield;
   sh.brain.path = []; sh.brain.replan = 0;
 }

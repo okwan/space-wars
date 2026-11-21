@@ -4,6 +4,7 @@
 // stay plain data (it keeps only the seed and the size).
 
 import { makeRng } from './math';
+import type { MapStyle } from './types';
 
 /** Tile kinds. */
 export const OPEN = 0, WALL = 1, SAFE = 2;
@@ -17,17 +18,24 @@ export interface ZoneMap {
   outposts: { x: number; y: number }[]; centre: number; safeR: number;
   /** Navigation grid for bots: cells of NAV tiles; 1 = a ship fits there with room to spare. */
   nav: Uint8Array; navN: number;
+  /** Named places (open style only): asteroid fields, derelicts, nebulae, the hub. Tile units. */
+  regions: Region[];
 }
+/** A named place on an open map, in tile coords. Nebulae are only looks; the rest are rock. */
+export interface Region { kind: 'hub' | 'field' | 'derelict' | 'nebula' | 'belt'; name: string; x: number; y: number; r: number }
 /** Tiles per navigation cell. */
 export const NAV = 2;
 
 const cache = new Map<string, ZoneMap>();
 
-/** The map for a seed and size, generated once and cached. */
-export function zoneMap(seed: number, n: number): ZoneMap {
-  const key = `${seed}:${n}`;
+/**
+ * The map for a seed, size and style, generated once and cached. `arena` (the default) is the
+ * walled free-for-all zone; `open` is a wide open-world map of named regions.
+ */
+export function zoneMap(seed: number, n: number, style: MapStyle = 'arena'): ZoneMap {
+  const key = `${seed}:${n}:${style}`;
   let m = cache.get(key);
-  if (!m) { m = generate(seed, n); cache.set(key, m); if (cache.size > 8) cache.delete(cache.keys().next().value!); }
+  if (!m) { m = generate(seed, n, style); cache.set(key, m); if (cache.size > 8) cache.delete(cache.keys().next().value!); }
   return m;
 }
 
@@ -60,9 +68,53 @@ export function clearLine(m: ZoneMap, ax: number, ay: number, bx: number, by: nu
 /** True when a point is inside the safe zone. */
 export const inSafe = (m: ZoneMap, x: number, y: number): boolean => tileAtPx(m, x, y) === SAFE;
 
-function generate(seed: number, n: number): ZoneMap {
-  const rnd = makeRng(seed * 7919 + n);
+function generate(seed: number, n: number, style: MapStyle): ZoneMap {
   const t = new Uint8Array(n * n);
+  const lay = style === 'open' ? openLayout(seed, n, t) : arenaLayout(seed, n, t);
+  const c = lay.centre;
+  // The border: two tiles of wall all round.
+  for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) { t[k * n + i] = 1; t[(n - 1 - k) * n + i] = 1; t[i * n + k] = 1; t[i * n + n - 1 - k] = 1; }
+
+  // Navigation cells, then fill any open pocket a ship cannot reach from the centre.
+  const navN = Math.floor(n / NAV), nav = new Uint8Array(navN * navN);
+  const navFill = () => {
+    for (let cy = 0; cy < navN; cy++) for (let cx = 0; cx < navN; cx++) {
+      let ok = 1;
+      for (let y = cy * NAV - 1; y < cy * NAV + NAV + 1 && ok; y++) for (let x = cx * NAV - 1; x < cx * NAV + NAV + 1; x++) {
+        if (x < 0 || y < 0 || x >= n || y >= n || t[y * n + x] === 1) { ok = 0; break; }
+      }
+      nav[cy * navN + cx] = ok;
+    }
+  };
+  navFill();
+  const seen = new Uint8Array(navN * navN), q = [Math.floor(c / NAV) * navN + Math.floor(c / NAV)];
+  seen[q[0]] = 1;
+  while (q.length) {
+    const i = q.pop()!, x = i % navN, y = (i - x) / navN;
+    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + ax, ny = y + ay, j = ny * navN + nx;
+      if (nx < 0 || ny < 0 || nx >= navN || ny >= navN || seen[j] || !nav[j]) continue;
+      seen[j] = 1; q.push(j);
+    }
+  }
+  for (let cy = 0; cy < navN; cy++) for (let cx = 0; cx < navN; cx++) {
+    const i = cy * navN + cx;
+    if (seen[i]) continue;
+    // a cell nobody can reach: wall over its open tiles unless a reachable cell touches them
+    let near = false;
+    for (let y = cy - 1; y <= cy + 1 && !near; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x >= 0 && y >= 0 && x < navN && y < navN && seen[y * navN + x]) { near = true; break; }
+    if (!near) for (let y = cy * NAV; y < cy * NAV + NAV; y++) for (let x = cx * NAV; x < cx * NAV + NAV; x++) if (t[y * n + x] === 0) t[y * n + x] = 1;
+  }
+  navFill();
+  for (let i = 0; i < nav.length; i++) if (!seen[i]) nav[i] = 0;
+  return { n, tiles: t, outposts: lay.outposts, centre: c, safeR: lay.safeR, nav, navN, regions: lay.regions };
+}
+
+interface Layout { centre: number; safeR: number; outposts: { x: number; y: number }[]; regions: Region[] }
+
+/** The arena: structures drawn in one quadrant and stamped four ways round the safe zone. */
+function arenaLayout(seed: number, n: number, t: Uint8Array): Layout {
+  const rnd = makeRng(seed * 7919 + n);
   const h = n / 2, c = Math.floor(h);
   // Everything is drawn in one quadrant (x >= c, y < c, measured from the centre) and stamped
   // four ways by rotation, so every direction out of the safe zone looks the same.
@@ -117,43 +169,8 @@ function generate(seed: number, n: number): ZoneMap {
     if (r >= ringR && r < ringR + 2 && !gate) t[y * n + x] = 1;
     if (r < safeR) t[y * n + x] = 2;
   }
-  // The border: two tiles of wall all round.
-  for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) { t[k * n + i] = 1; t[(n - 1 - k) * n + i] = 1; t[i * n + k] = 1; t[i * n + n - 1 - k] = 1; }
-
-  // Navigation cells, then fill any open pocket a ship cannot reach from the centre.
-  const navN = Math.floor(n / NAV), nav = new Uint8Array(navN * navN);
-  const navFill = () => {
-    for (let cy = 0; cy < navN; cy++) for (let cx = 0; cx < navN; cx++) {
-      let ok = 1;
-      for (let y = cy * NAV - 1; y < cy * NAV + NAV + 1 && ok; y++) for (let x = cx * NAV - 1; x < cx * NAV + NAV + 1; x++) {
-        if (x < 0 || y < 0 || x >= n || y >= n || t[y * n + x] === 1) { ok = 0; break; }
-      }
-      nav[cy * navN + cx] = ok;
-    }
-  };
-  navFill();
-  const seen = new Uint8Array(navN * navN), q = [Math.floor(c / NAV) * navN + Math.floor(c / NAV)];
-  seen[q[0]] = 1;
-  while (q.length) {
-    const i = q.pop()!, x = i % navN, y = (i - x) / navN;
-    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = x + ax, ny = y + ay, j = ny * navN + nx;
-      if (nx < 0 || ny < 0 || nx >= navN || ny >= navN || seen[j] || !nav[j]) continue;
-      seen[j] = 1; q.push(j);
-    }
-  }
-  for (let cy = 0; cy < navN; cy++) for (let cx = 0; cx < navN; cx++) {
-    const i = cy * navN + cx;
-    if (seen[i]) continue;
-    // a cell nobody can reach: wall over its open tiles unless a reachable cell touches them
-    let near = false;
-    for (let y = cy - 1; y <= cy + 1 && !near; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x >= 0 && y >= 0 && x < navN && y < navN && seen[y * navN + x]) { near = true; break; }
-    if (!near) for (let y = cy * NAV; y < cy * NAV + NAV; y++) for (let x = cx * NAV; x < cx * NAV + NAV; x++) if (t[y * n + x] === 0) t[y * n + x] = 1;
-  }
-  navFill();
-  for (let i = 0; i < nav.length; i++) if (!seen[i]) nav[i] = 0;
   const outposts = [[outR, 0], [0, outR], [-outR, 0], [0, -outR]].map(([dx, dy]) => ({ x: c + dx, y: c + dy }));
-  return { n, tiles: t, outposts, centre: c, safeR, nav, navN };
+  return { centre: c, safeR, outposts, regions: [] };
 }
 
 /**
@@ -214,4 +231,114 @@ function nearestOpen(m: ZoneMap, i: number, px: number, py: number): number {
     if (m.nav[y * N + x] && clearLine(m, px, py, (x + 0.5) * S, (y + 0.5) * S)) return y * N + x;
   }
   return -1;
+}
+
+// ---- the open world --------------------------------------------------------------------------
+// Our own layout rules: a safe hub in the middle, then named asteroid fields and derelict
+// rings scattered with long empty stretches between them, lone rocks drifting in the gaps,
+// nebula regions (looks only), and a thickening asteroid belt at the rim instead of a wall.
+
+const FIELD_NAMES = ['CINDER DRIFT', 'THE SHOALS', 'GLASS REACH', 'THE HOLLOWS', 'THE TEETH', 'SALT RUN', 'KESTREL FIELD', 'BRAMBLE', 'SLAG REACH', 'THE SCATTER', 'IRONWOOD', 'GRAVEL SEA', 'MOTH FIELD', 'THE ANVILS'];
+const DERELICT_NAMES = ['OLD RELAY', 'DRY DOCK', 'WARDEN RING', 'THE LANTERN', 'BONEYARD', 'QUIET SPIRE', 'HALO NINE'];
+const NEBULA_NAMES = ['VIOLET VEIL', 'EMBER CLOUD', 'TIDEGLASS', 'THE MURK', 'PALE RIVER', 'ROSE DRIFT'];
+
+function openLayout(seed: number, n: number, t: Uint8Array): Layout {
+  const rnd = makeRng(seed * 104729 + n * 7);
+  const c = Math.floor(n / 2), rim = Math.round(n * 0.06);
+  const regions: Region[] = [];
+  const hash = (x: number, y: number): number => {
+    let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 1442695041)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+  const set = (x: number, y: number, v: number): void => { if (x >= 0 && y >= 0 && x < n && y < n) t[y * n + x] = v; };
+  /** One rock: a lumpy disc, its outline wobbling with angle, its edge roughened per tile. */
+  const rock = (bx: number, by: number, r: number): void => {
+    const a1 = rnd() * 6.28, a2 = rnd() * 6.28, R = Math.ceil(r * 1.35) + 1;
+    for (let y = -R; y <= R; y++) for (let x = -R; x <= R; x++) {
+      const ang = Math.atan2(y, x), d = Math.hypot(x, y) / r;
+      const edge = 1 + Math.sin(ang * 3 + a1) * 0.17 + Math.sin(ang * 5 + a2) * 0.09 + (hash(bx + x, by + y) - 0.5) * 0.16;
+      if (d < edge) set(Math.round(bx + x), Math.round(by + y), 1);
+    }
+  };
+  const free = (x: number, y: number, r: number, pad: number, kinds: Region['kind'][]): boolean =>
+    regions.every(g => !kinds.includes(g.kind) || Math.hypot(g.x - x, g.y - y) > g.r + r + pad);
+  const spot = (r: number, pad: number, kinds: Region['kind'][]): [number, number] | null => {
+    for (let k = 0; k < 80; k++) {
+      const x = rim + r + rnd() * (n - 2 * (rim + r)), y = rim + r + rnd() * (n - 2 * (rim + r));
+      if (free(x, y, r, pad, kinds)) return [Math.round(x), Math.round(y)];
+    }
+    return null;
+  };
+  const pick = (names: string[]): string => names.splice(Math.floor(rnd() * names.length), 1)[0] ?? 'UNCHARTED';
+  const fNames = FIELD_NAMES.slice(), dNames = DERELICT_NAMES.slice(), nNames = NEBULA_NAMES.slice();
+
+  const safeR = Math.max(8, Math.round(n * 0.014)), ringR = safeR + 5;
+  regions.push({ kind: 'hub', name: 'HAVEN', x: c, y: c, r: ringR + 36 });
+  // asteroid fields
+  const fields = Math.round((n * n) / 90000);
+  for (let i = 0; i < fields; i++) {
+    const r = 26 + Math.floor(rnd() * 36), at = spot(r, 34, ['hub', 'field', 'derelict']);
+    if (!at) continue;
+    regions.push({ kind: 'field', name: pick(fNames), x: at[0], y: at[1], r });
+    const count = Math.round(Math.PI * r * r * 0.0042);
+    for (let k = 0; k < count; k++) {
+      const a = rnd() * 6.28, d = Math.sqrt(rnd()) * r;
+      rock(at[0] + Math.cos(a) * d, at[1] + Math.sin(a) * d, 1.5 + rnd() * rnd() * 7);
+    }
+  }
+  // derelict rings: a broken hoop with four gaps, a core and a few spokes
+  const derelicts = Math.max(3, Math.round((n * n) / 220000));
+  const outposts: { x: number; y: number }[] = [];
+  for (let i = 0; i < derelicts; i++) {
+    const r = 12 + Math.floor(rnd() * 9), at = spot(r, 40, ['hub', 'field', 'derelict']);
+    if (!at) continue;
+    regions.push({ kind: 'derelict', name: pick(dNames), x: at[0], y: at[1], r: r + 4 });
+    outposts.push({ x: at[0], y: at[1] });
+    const turn = rnd() * 6.28;
+    for (let y = -r - 2; y <= r + 2; y++) for (let x = -r - 2; x <= r + 2; x++) {
+      const d = Math.hypot(x, y), ang = Math.atan2(y, x) - turn;
+      const gap = Math.abs(Math.sin(ang * 2)) < 4.5 / r; // four doorways, each about 8 tiles wide
+      if (d >= r && d < r + 2 && !gap) set(at[0] + x, at[1] + y, 1);
+      if (Math.max(Math.abs(x), Math.abs(y)) < 3) set(at[0] + x, at[1] + y, 1); // the core
+    }
+    for (let s = 0; s < 3; s++) { // spokes from the hoop inwards
+      const a = turn + Math.PI / 4 + (s * Math.PI * 2) / 3;
+      for (let d = r - 6; d < r; d++) for (let w = -1; w <= 0; w++) set(Math.round(at[0] + Math.cos(a) * d - Math.sin(a) * w), Math.round(at[1] + Math.sin(a) * d + Math.cos(a) * w), 1);
+    }
+  }
+  // lone rocks drifting in the open
+  const lone = Math.round((n * n) / 6500);
+  for (let i = 0; i < lone; i++) {
+    const x = rim + rnd() * (n - 2 * rim), y = rim + rnd() * (n - 2 * rim);
+    if (Math.hypot(x - c, y - c) < ringR + 40) continue;
+    rock(x, y, 1 + rnd() * 2.5);
+  }
+  // the rim: rocks thicken towards the edge into a ragged crust, so the zone has no straight wall
+  const beltRocks = Math.round(n * rim * 0.32);
+  for (let i = 0; i < beltRocks; i++) {
+    const e = rim * (1 - Math.sqrt(rnd())), along = rnd() * n, side = Math.floor(rnd() * 4);
+    const [x, y] = side === 0 ? [along, e] : side === 1 ? [along, n - 1 - e] : side === 2 ? [e, along] : [n - 1 - e, along];
+    rock(x, y, 1.5 + rnd() * 4.5 * (1 - e / rim));
+  }
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const e = Math.min(x, y, n - 1 - x, n - 1 - y);
+    if (e < 5 + hash(x >> 2, y >> 2) * 6) t[y * n + x] = 1;
+  }
+  regions.push({ kind: 'belt', name: 'THE OUTER BELT', x: c, y: c, r: rim });
+  // nebulae: looks only, so they may lie over fields; never over the hub
+  for (let i = 0; i < 5; i++) {
+    const r = 60 + Math.floor(rnd() * 60), at = spot(r, 10, ['hub', 'nebula']);
+    if (at) regions.push({ kind: 'nebula', name: pick(nNames), x: at[0], y: at[1], r });
+  }
+  // the hub: cleared, with the safe zone inside a wall ring with four wide gates
+  for (let dy = -ringR - 30; dy <= ringR + 30; dy++) for (let dx = -ringR - 30; dx <= ringR + 30; dx++) {
+    if (Math.hypot(dx, dy) < ringR + 30) set(c + dx, c + dy, 0);
+  }
+  for (let dy = -ringR - 2; dy <= ringR + 2; dy++) for (let dx = -ringR - 2; dx <= ringR + 2; dx++) {
+    const r = Math.hypot(dx, dy), gate = Math.min(Math.abs(dx), Math.abs(dy)) < 4;
+    if (r >= ringR && r < ringR + 2 && !gate) set(c + dx, c + dy, 1);
+    if (r < safeR) set(c + dx, c + dy, 2);
+  }
+  return { centre: c, safeR, outposts, regions };
 }
